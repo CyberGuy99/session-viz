@@ -107,7 +107,8 @@ def narrative_state(path: Path, facts: dict) -> tuple[dict, str, list[str], dict
             ([f"… and {len(dropped) - 3} more"] if len(dropped) > 3 else [])
     mp = build.meta_path(path)
     d = build.delta(narr, facts, json.loads(mp.read_text()) if mp.exists() else None)
-    behind = {"events": sum(1 for e in d["new_events"] if e["kind"] in NOTABLE),
+    behind = {"events": sum(1 for e in d["new_events"]  # edits outside the repo (scratch, caches) aren't news
+                            if e["kind"] in NOTABLE and (e["kind"] != "edit" or e.get("file"))),
               "entries": len(d["stale"]) + len(d["unreviewed"])}
     return narr, state, notes, behind
 
