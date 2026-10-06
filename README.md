@@ -20,6 +20,16 @@ python3 scripts/build.py $OUT/facts.json $OUT/narrative.json -o $OUT/dist/index.
 scripts/publish.sh $OUT/dist <session-id>
 ```
 
+## Whole project
+
+```bash
+python3 scripts/project.py                 # sessions of the cwd's project; --project <repo|transcript dir>
+# → ~/.cache/session-viz/project-<encoded-cwd>/dist/index.html (+ s/<session-id>/index.html)
+scripts/publish.sh ~/.cache/session-viz/project-<encoded-cwd>/dist project-<name>
+```
+
+Every session gets a report. Narratives come from `~/.cache/session-viz/<session-id>/narrative.json` (written by the skill); sessions without one render facts-only, and the script prints the `/session-viz --session <path>` command for each. Re-runs only re-extract sessions whose transcript, narrative, git HEAD (or working tree, for sessions that end at it) or scripts changed.
+
 ## Hosting
 
 Reports are private: Cloudflare Workers static assets behind Cloudflare Access (free tier: up to 50 users). **Not GitHub Pages**: on GitHub Pro, Pages from a private repo is still served at a public URL; access-controlled Pages needs Enterprise Cloud. (PLAN.md said Cloudflare Pages; wrangler ≥ 4.148 redirects Pages to Workers, see decisions.md.)

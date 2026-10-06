@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><!--TITLE--></title>
+<style>
+:root {
+  --bg: #fbfbfa; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e3df; --soft: #f3f2ef;
+  --accent: #3a5ccc; --add-ink: #1e6b34; --del-ink: #a1301f;
+  --acc: #2f8a4c; --warn: #b7791f; --err: #c0392b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --panel: #1f1f1d; --ink: #ecebe7; --muted: #9c9b95; --line: #33332f; --soft: #2a2a27;
+    --accent: #8ea6ff; --add-ink: #8fe0a8; --del-ink: #ffaa9c;
+    --acc: #5cc27c; --warn: #e0a84a; --err: #ff7b6b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161615; --panel: #1f1f1d; --ink: #ecebe7; --muted: #9c9b95; --line: #33332f; --soft: #2a2a27;
+  --accent: #8ea6ff; --add-ink: #8fe0a8; --del-ink: #ffaa9c;
+  --acc: #5cc27c; --warn: #e0a84a; --err: #ff7b6b;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); }
+code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
+a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+header { padding: 28px 32px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { margin: 0 0 6px; font-size: 22px; line-height: 1.3; font-weight: 650; }
+.meta { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+main { padding: 20px 32px 80px; max-width: 1100px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 14px; }
+.toolbar input { font: inherit; flex: 1 1 240px; min-width: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.filters { display: flex; flex-wrap: wrap; gap: 4px; }
+.filters button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 99px; padding: 2px 10px; cursor: pointer; }
+.filters button.on { color: var(--ink); border-color: var(--ink); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; }
+.card h3 { margin: 0 0 2px; font-size: 15.5px; font-weight: 620; line-height: 1.35; }
+.card .prompt { color: var(--muted); font-size: 13px; margin: 2px 0 8px; overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px 6px; font-size: 12px; }
+.chip { border: 1px solid var(--line); border-radius: 99px; padding: 0 8px; color: var(--muted); white-space: nowrap; }
+.chip.bad { color: var(--err); border-color: var(--err); }
+.chip.warn { color: var(--warn); border-color: var(--warn); }
+.chip.ok { color: var(--acc); border-color: var(--acc); }
+.add { color: var(--add-ink); } .del { color: var(--del-ink); }
+.progress { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); max-width: 420px; }
+.bar { flex: 1; height: 6px; background: var(--soft); border-radius: 99px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+details.regen { margin-top: 8px; font-size: 12.5px; }
+details.regen summary { cursor: pointer; color: var(--warn); }
+details.regen pre { background: var(--soft); border-radius: 6px; padding: 8px 10px; margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.empty { padding: 20px; color: var(--muted); }
+@media (max-width: 640px) {
+  header, main { padding-left: 16px; padding-right: 16px; }
+}
+</style>
+</head>
+<body>
+<header id="hdr"></header>
+<main>
+  <div class="toolbar">
+    <input id="q" type="search" placeholder="Search titles and prompts" aria-label="Search sessions">
+    <div class="filters" id="filters"></div>
+  </div>
+  <div id="list"></div>
+</main>
+<!--DATA-->
+<script>
+(() => {
+"use strict";
+const el0 = document.getElementById("project");
+let raw = el0 ? el0.textContent : "{}";
+if (el0 && el0.dataset.encoding === "base64") raw = new TextDecoder().decode(Uint8Array.from(atob(raw), c => c.charCodeAt(0)));
+const D = JSON.parse(raw || "{}"), P = D.project || {}, sessions = D.sessions || [];
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v; else if (k.startsWith("on")) el.addEventListener(k.slice(2), v); else el.setAttribute(k, v);
+  }
+  for (const k of kids.flat(Infinity)) if (k != null && k !== false && k !== "") el.append(k instanceof Node ? k : String(k));
+  return el;
+}
+const date = ts => ts ? new Date(ts).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+const dur = s => { s = s || 0; const hh = Math.floor(s / 3600), mm = Math.round((s % 3600) / 60); return hh ? `${hh}h ${mm}m` : `${mm}m`; };
+const usd = x => "$" + x.toFixed(2);
+
+// header
+const starts = sessions.map(s => s.start).filter(Boolean).sort();
+const cost = sessions.reduce((a, s) => a + (s.cost_usd || 0), 0);
+const withNarr = sessions.filter(s => s.narrative === "ok").length;
+document.getElementById("hdr").append(
+  h("h1", null, P.name || "Project"),
+  h("div", { class: "meta" },
+    P.cwd && h("span", { class: "mono" }, P.cwd),
+    h("span", null, `${sessions.length} session${sessions.length === 1 ? "" : "s"}`),
+    starts.length && h("span", null, `${date(starts[0])} – ${date(starts[starts.length - 1])}`),
+    cost > 0 && h("span", null, `${usd(cost)} total`),
+    h("span", null, `${withNarr}/${sessions.length} with narrative`)));
+
+// filters
+const FILTERS = [
+  ["all", "All", () => true],
+  ["narr", "Narrative", s => s.narrative === "ok"],
+  ["nonarr", "No narrative", s => s.narrative !== "ok"],
+  ["fail", "Failures", s => s.tests_failed > 0 || s.errors > 0],
+];
+let filter = "all";
+const fbox = document.getElementById("filters"), q = document.getElementById("q");
+for (const [id, label] of FILTERS)
+  fbox.append(h("button", { "data-f": id, class: id === filter ? "on" : null, onclick: () => { filter = id; draw(); } }, label));
+q.addEventListener("input", () => draw());
+
+function card(s) {
+  const chips = [
+    h("span", { class: "chip" }, `${s.turns} turn${s.turns === 1 ? "" : "s"}`),
+    h("span", { class: "chip" }, dur(s.duration_s)),
+    s.files_changed > 0 && h("span", { class: "chip" }, `${s.files_changed} file${s.files_changed === 1 ? "" : "s"} `,
+      h("span", { class: "add" }, `+${s.added_lines}`), " ", h("span", { class: "del" }, `−${s.removed_lines}`)),
+    s.test_runs > 0 && h("span", { class: "chip " + (s.tests_failed ? "warn" : "ok") },
+      `${s.test_runs} test run${s.test_runs === 1 ? "" : "s"}` + (s.tests_failed ? `, ${s.tests_failed} failing` : "")),
+    s.errors > 0 && h("span", { class: "chip bad" }, `${s.errors} error${s.errors === 1 ? "" : "s"}`),
+    s.tasks_total > 0 && h("span", { class: "chip" }, `tasks ${s.tasks_done}/${s.tasks_total}`),
+    s.subagents > 0 && h("span", { class: "chip" }, `${s.subagents} subagent${s.subagents === 1 ? "" : "s"}`),
+    s.branch && h("span", { class: "chip mono" }, s.branch),
+    s.cost_usd != null && h("span", { class: "chip" }, usd(s.cost_usd)),
+    s.compacted && h("span", { class: "chip warn", title: "Transcript was /compact-ed; early edits need --since" }, "compacted"),
+    s.discrepancies > 0 && h("span", { class: "chip warn", title: "See the discrepancies panel in the report" }, `${s.discrepancies} discrepanc${s.discrepancies === 1 ? "y" : "ies"}`),
+    s.narrative === "ok" ? h("span", { class: "chip ok" }, "narrative")
+      : h("span", { class: "chip warn" }, s.narrative === "stale" ? "narrative out of date" : "facts only"),
+  ];
+  const showPrompt = s.first_prompt && s.first_prompt !== s.title;
+  return h("div", { class: "card", id: "s-" + s.id },
+    h("h3", null, h("a", { href: s.href }, s.title || s.id)),
+    h("div", { class: "meta" }, h("span", null, date(s.start)), h("span", { class: "mono" }, s.id.slice(0, 8))),
+    showPrompt && h("div", { class: "prompt" }, s.first_prompt),
+    h("div", { class: "chips" }, chips),
+    s.progress != null && h("div", { class: "progress" },
+      h("div", { class: "bar" }, h("i", { style: `width:${Math.max(0, Math.min(100, s.progress))}%` })), `${s.progress}% to goal`),
+    s.regen && s.regen.length > 0 && h("details", { class: "regen" },
+      h("summary", null, s.narrative === "stale" ? "Narrative no longer matches the facts: how to regenerate"
+                                                 : "No narrative yet: how to generate one"),
+      (s.narrative_errors || []).length > 0 && h("pre", null, s.narrative_errors.join("\n")),
+      h("div", null, "In Claude Code, from the session's repo:"), h("pre", null, s.regen[0]),
+      h("div", null, "Then rebuild this site:"), h("pre", null, s.regen[1])));
+}
+
+function draw() {
+  for (const b of fbox.children) b.classList.toggle("on", b.dataset.f === filter);
+  const test = FILTERS.find(f => f[0] === filter)[2], needle = q.value.trim().toLowerCase();
+  const shown = sessions.filter(s => test(s) &&
+    (!needle || [s.title, s.first_prompt, s.id, s.branch].some(x => (x || "").toLowerCase().includes(needle))));
+  const list = document.getElementById("list");
+  list.replaceChildren(...(shown.length ? shown.map(card) : [h("div", { class: "empty" }, "No sessions match.")]));
+}
+draw();
+})();
+</script>
+</body>
+</html>

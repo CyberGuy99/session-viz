@@ -147,6 +147,38 @@ def test_byte_identical_output(tmp_path):
     assert dump() == dump()
 
 
+def test_historical_session_uses_end_commit(tmp_path):
+    repo = setup_repo(tmp_path)
+    t = T(repo)
+    t.prompt("ints")
+    new = "def parse(s):\n    return [int(x) for x in s.split(',')]\n"
+    t.tool("Write", {"file_path": str(repo / "calc.py"), "content": new})
+    t.prompt("thanks")  # session ends 2026-01-01T00:04
+    (repo / "calc.py").write_text(new)
+    git(repo, "commit", "-qam", "ints", "--date", "2026-01-01T00:03:30Z")
+    session_end = git_out(repo, "rev-parse", "HEAD")
+    # a later session's work, committed and uncommitted
+    (repo / "conf.json").write_text('{"a": 2}\n')
+    git(repo, "commit", "-qam", "later", "--date", "2026-02-01T00:00:00Z")
+    (repo / "calc.py").write_text("X = 1\n")
+
+    p = t.write(tmp_path / "S.jsonl")
+    facts, meta = extract.extract(p, str(repo), None)
+    s = facts["session"]
+    assert s["end_ref"] == session_end and s["end_ref_basis"].startswith("last commit before")
+    assert set(facts["files"]) == {"calc.py"} and meta["verify"] == [{"path": "calc.py", "match": True}]
+    assert facts["discrepancies"] == []
+
+    facts, meta = extract.extract(p, str(repo), None, "worktree")
+    assert facts["session"]["end_ref"] == "worktree"
+    assert {(x["kind"], x["path"]) for x in facts["discrepancies"]} == \
+        {("replay_mismatch", "calc.py"), ("git_only", "conf.json")}
+
+
+def git_out(repo, *a):
+    return subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True).stdout.strip()
+
+
 def test_csv_and_structured_helpers():
     c = extract.diff_csv("a,b\n1,2\n3,4\n", "a,b,c\n1,2,0\n3,4,0\n5,6,0\n")
     assert c["rows_before"] == 2 and c["rows_after"] == 3 and c["columns_added"] == ["c"]

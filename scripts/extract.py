@@ -733,16 +733,60 @@ def resolve_start_sha(t: Transcript, repo: str, since: str | None) -> tuple[str 
     return None, "no commits"
 
 
-def git_changes(repo: str, start_sha: str | None) -> dict[str, str]:
-    """path -> A|M|D|R from start_sha to working tree, plus untracked (A)."""
+def resolve_end_ref(t: Transcript, repo: str, until: str | None) -> tuple[str | None, str]:
+    """Commit holding the session's final state, or None for the working tree.
+
+    An older session's end state is the last commit authored at/before its last record; the working
+    tree would include every later session's work.
+    """
+    if until:
+        if until == "worktree":
+            return None, "--until"
+        sha = (git(repo, "rev-parse", until) or "").strip()
+        if not sha:
+            sys.exit(f"--until {until}: not a commit in {repo}")
+        return sha, "--until"
+    if not t.all:
+        return None, "empty transcript"
+    end = parse_ts(t.all[-1]["timestamp"])
+    last, later = None, False
+    for line in (git(repo, "log", "--reverse", "--format=%H %aI", "HEAD") or "").splitlines():
+        sha, date = line.split()[:2]
+        if parse_ts(date) <= end:
+            last = sha
+        else:
+            later = True
+            break
+    if later:
+        return last or EMPTY_TREE, "last commit before session end (later commits exist)"
+    return None, "worktree"
+
+
+def git_changes(repo: str, start_sha: str | None, end_sha: str | None = None) -> dict[str, str]:
+    """path -> A|M|D|R from start_sha to end_sha (default: working tree, plus untracked as A)."""
     out = {}
     base = start_sha or EMPTY_TREE
-    for line in (git(repo, "diff", "--name-status", "--no-renames", base) or "").splitlines():
+    for line in (git(repo, "diff", "--name-status", "--no-renames", base, *([end_sha] if end_sha else []))
+                 or "").splitlines():
         status, _, path = line.partition("\t")
         out[path] = status[0]
-    for path in (git(repo, "ls-files", "--others", "--exclude-standard") or "").splitlines():
-        out[path] = "A"
+    if end_sha is None:
+        for path in (git(repo, "ls-files", "--others", "--exclude-standard") or "").splitlines():
+            out[path] = "A"
     return out
+
+
+def final_content(repo: str, rel: str, end_sha: str | None) -> str | None:
+    """File content at the session's end: `end_sha:rel`, or the working tree. None if absent.
+    Raises UnicodeDecodeError for binary content."""
+    if end_sha is None:
+        try:
+            with open(os.path.join(repo, rel), encoding="utf-8", newline="") as fh:
+                return fh.read()
+        except FileNotFoundError:
+            return None
+    r = subprocess.run(["git", "-C", repo, "show", f"{end_sha}:{rel}"], capture_output=True)
+    return r.stdout.decode("utf-8") if r.returncode == 0 else None  # bytes: keep \r\n as on disk
 
 
 def is_ignored(repo: str, rel: str) -> bool:
@@ -806,12 +850,13 @@ def build_tasks(t: Transcript) -> list[dict]:
     return [tasks[k] for k in order]
 
 
-def extract(session: Path, repo: str | None, since: str | None) -> tuple[dict, dict]:
+def extract(session: Path, repo: str | None, since: str | None, until: str | None = None) -> tuple[dict, dict]:
     t = Transcript(session)
     repo = repo or t.cwd or os.getcwd()
     top = (git(repo, "rev-parse", "--show-toplevel") or "").strip()
     repo_root = os.path.realpath(top or repo)
     start_sha, sha_basis = resolve_start_sha(t, repo_root, since) if top else (None, "not a git repo")
+    end_sha, end_basis = resolve_end_ref(t, repo_root, until) if top else (None, "not a git repo")
     discrepancies: list[dict] = []
     if t.compacted and not since:
         discrepancies.append({"kind": "compacted_without_since", "path": None, "event": None,
@@ -893,7 +938,7 @@ def extract(session: Path, repo: str | None, since: str | None) -> tuple[dict, d
     events.sort(key=lambda e: (e["ts"], e["uuid"]))
 
     # files
-    git_files = git_changes(repo_root, start_sha) if top else {}
+    git_files = git_changes(repo_root, start_sha, end_sha) if top else {}
     files: dict[str, dict] = {}
     verify: list[dict] = []
     edit_events: dict[str, list[str]] = {}
@@ -905,12 +950,8 @@ def extract(session: Path, repo: str | None, since: str | None) -> tuple[dict, d
         rp = replays.get(rel)
         if rel not in git_files and not (rp and rp.calls):
             continue  # only ever Read: not a change
-        disk_path = os.path.join(repo_root, rel)
         try:
-            with open(disk_path, encoding="utf-8", newline="") as fh:
-                disk = fh.read()
-        except FileNotFoundError:
-            disk = None
+            disk = final_content(repo_root, rel, end_sha)
         except (UnicodeDecodeError, IsADirectoryError):
             files[rel] = {"path": rel, "binary": True, "git_status": git_files.get(rel),
                           "status": {"A": "added", "D": "deleted"}.get(git_files.get(rel), "modified"),
@@ -923,8 +964,9 @@ def extract(session: Path, repo: str | None, since: str | None) -> tuple[dict, d
             match = after == disk
             verify.append({"path": rel, "match": match})
             if not match:
+                where = f"commit {end_sha[:8]}" if end_sha else "the working tree"
                 discrepancies.append({"kind": "replay_mismatch", "path": rel, "event": None,
-                                      "detail": "replayed content differs from the working tree "
+                                      "detail": f"replayed content differs from {where} "
                                                 "(edited outside Write/Edit tools, or after the session)"})
         else:
             before = git(repo_root, "show", f"{start_sha}:{rel}") if start_sha else None
@@ -953,6 +995,7 @@ def extract(session: Path, repo: str | None, since: str | None) -> tuple[dict, d
         "duration_s": int((parse_ts(ts_all[-1]) - parse_ts(ts_all[0])).total_seconds()) if ts_all else 0,
         "turns": len(t.prompts), "goal_candidate": prompts[0] if prompts else None,
         "user_messages": prompts, "start_sha": start_sha, "start_sha_basis": sha_basis,
+        "end_ref": end_sha or "worktree", "end_ref_basis": end_basis,
         "compacted": t.compacted, "outside_repo_files": sorted(outside), "ignored_files": sorted(ignored),
         "git_branch": next((r.get("gitBranch") for r in t.records if r.get("gitBranch")), None),
     }
@@ -966,10 +1009,14 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--session", default="latest", help="path to .jsonl, or 'latest' for this cwd")
     ap.add_argument("--since", help="commit to treat as the session's starting state (required after /compact)")
+    ap.add_argument("--until", help="commit holding the session's final state, or 'worktree' "
+                                    "(default: last commit before session end if later commits exist, "
+                                    "else worktree)")
     ap.add_argument("--repo", help="git repo root (default: transcript cwd)")
     ap.add_argument("-o", "--out", help="write facts.json here (default: stdout)")
     ap.add_argument("--verify", action="store_true",
-                    help="report replay fidelity vs working tree; exit 1 if < 95%% of replayed files match")
+                    help="report replay fidelity vs the end state (--until); "
+                         "exit 1 if < 95%% of replayed files match")
     ap.add_argument("--print-path", action="store_true", help="print the resolved transcript path and exit")
     a = ap.parse_args(argv)
 
@@ -977,7 +1024,7 @@ def main(argv=None) -> int:
     if a.print_path:
         print(session)
         return 0
-    facts, meta = extract(session, a.repo, a.since)
+    facts, meta = extract(session, a.repo, a.since, a.until)
     blob = json.dumps(facts, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)

@@ -108,6 +108,14 @@ def test_mini_validator_agrees_with_jsonschema():
     assert build.mini_validate(GOOD, schema, schema) == []
 
 
+def test_back_link_only_in_project_mode():
+    facts = {**FACTS, "session": {"id": "abcdef12"}}
+    plain, linked = build.render(facts, {}), build.render(facts, {}, "../../index.html")
+    assert "<!--BACK-->" not in plain and "all sessions" not in plain
+    assert '<nav class="back"><a href="../../index.html">' in linked
+    assert linked.replace(linked[linked.index('<nav class="back">'):linked.index("</nav>") + 6], "") == plain
+
+
 def test_embed_escapes_and_base64(monkeypatch):
     obj = {"x": "</script><!-- <b>"}
     s = build.embed("facts", obj)

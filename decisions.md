@@ -86,5 +86,17 @@ The first login to the report URL failed with "That account does not have access
 ## 2026-10-06 — `#f-` deep-link blank band was a headless artifact
 Headless Chromium screenshots of `index.html#f-<path>` showed a large empty band above the expanded card. The user loaded the deep link in Firefox and the card opened correctly at the top with no gap. No code change; don't trust headless `--screenshot` for scroll-position checks.
 
+## 2026-10-06 — Project mode is a static prebuild
+The user asked for a project home page where clicking a session shows its report. The published site is static assets behind Access, so nothing can run on click. The user chose to prebuild every session up front (`scripts/project.py`) over a local lazy server. Site: `dist/index.html` + `dist/s/<session-id>/index.html`, relative links, so it works from `file://` and through `publish.sh` unchanged.
+
+## 2026-10-06 — Project mode never calls Claude for narratives
+Narratives are reused from `~/.cache/session-viz/<sid>/narrative.json`, the skill's own output path, when they pass `build.validate` against the freshly extracted facts (`ok`). A narrative that fails is `stale`, a missing one is `missing`. Both render facts-only, and the CLI and index page show `/session-viz --session <path>` plus the rebuild command (user's choice over headless `claude -p` generation).
+
+## 2026-10-06 — Session end state: last commit before session end
+**[deviation]** §7.1 compares the replay against the working tree. That's wrong for any session but the latest: later sessions' changes showed up as `git_only` noise in older reports. `extract.py` now resolves `end_ref`: `--until <sha|worktree>` wins. Otherwise, if any commit is authored after the session's last record, it's the last commit authored at or before that (empty tree if none). Otherwise it's the worktree. Changed files, final content and `--verify` all use `end_ref`. Limitation: work left uncommitted at session end and committed only later is not in `end_ref`, so it surfaces as `replay_mismatch`. Likewise, an older session that still ends at the worktree (no later commits yet) can show a later session's uncommitted edits as mismatches. Both are reported, not hidden.
+
+## 2026-10-06 — project.py cache key
+Per session: transcript + subagent file stats, sha256 of extract.py/build.py/index.html, narrative stat, git HEAD, and (only when the previous build's `end_ref` was the worktree) a hash of `git diff HEAD` + untracked file stats. A new commit therefore rebuilds every session in that repo. That's deliberate, because it can move any session's `end_ref`, and extraction is cheap compared with being wrong. Outputs are written only when their content changes, so cache hits leave mtimes alone.
+
 ## 2026-10-06 — Access deny path verified without a second account
 There was no second Cloudflare account to test refusal. Evidence instead: (1) before its policy was fixed, the Preview URLs application denied the user's own Cloudflare account with "That account does not have access", so non-matching identities are refused; (2) the user confirmed both applications have a single Allow policy whose Include is only Emails = rushilcd@gmail.com, rushilcd@umd.edu, with no Everyone / domain / login-method rules.

@@ -16,10 +16,12 @@
 - Extract: `python3 scripts/extract.py --session latest -o facts.json`
 - Build: `python3 scripts/build.py facts.json narrative.json -o dist/index.html`
 - Publish: `scripts/publish.sh dist <session-id>`
+- Project site: `python3 scripts/project.py` (all sessions of this project → `~/.cache/session-viz/project-*/dist/`)
 - Replay check (§7.1): `python3 scripts/extract.py --session latest --verify`
 
 ## Architecture notes
 - extract.py owns transcript parsing + symbol diffs; build.py owns rendering; Claude owns narrative.json only
+- project.py orchestrates extract/build over a project dir; it never calls Claude
 - Edit replay must seed from git before falling back to transcript Reads — see decisions.md
 - After /compact, early edits exist only in git; require --since
 - See architecture.md, glossary.md, decisions.md

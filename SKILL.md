@@ -11,7 +11,7 @@ Pipeline: `extract.py` (deterministic facts) → **you** write `narrative.json` 
 
 ## 1. Resolve the session and output dir
 
-Arguments the user may give: `--session <path|latest>` (default `latest` = newest transcript for this cwd), `--since <sha>`.
+Arguments the user may give: `--session <path|latest>` (default `latest` = newest transcript for this cwd), `--since <sha>`, `--until <sha|worktree>` (end state; default is the last commit before the session ended when later commits exist, else the working tree).
 
 ```bash
 SID=$(basename "$(python3 $SV/scripts/extract.py --session latest --print-path)" .jsonl)   # or the given path
@@ -102,3 +102,15 @@ It fails loudly if wrangler is missing or not logged in; relay the fix it prints
 Alternatives:
 - In Cowork / claude.ai with an Artifact tool: publish `$OUT/dist/index.html` as an artifact (private claude.ai URL until shared).
 - No URL needed: hand over `$OUT/dist/index.html`.
+
+## Project mode: every session of this project
+
+When the user wants the whole project ("visualize this project", "all sessions"):
+
+```bash
+python3 $SV/scripts/project.py            # or --project <repo path | ~/.claude/projects/<dir>>
+```
+
+It extracts and builds every session (cached; only changed transcripts are redone) into `${SESSION_VIZ_OUT:-~/.cache/session-viz}/project-<encoded-cwd>/dist/`: `index.html` lists sessions, `s/<session-id>/index.html` is each report. A session's page includes its narrative only if `$OUT/<session-id>/narrative.json` (§3's path) exists and passes validation; otherwise the page is facts-only and project.py prints the session with its `/session-viz --session <path>` command.
+
+Relay that list to the user and offer to write narratives for the sessions they pick. For each, follow §1–§4 with `--session <that transcript path>` (§2 can reuse `$OUT/<sid>/facts.json`, which project.py already wrote), then re-run project.py. Publishing is §5 with the project dir: `$SV/scripts/publish.sh <project out>/dist project-<name>`. Ask first, as in §5.

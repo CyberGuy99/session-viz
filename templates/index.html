@@ -103,16 +103,18 @@ td code { word-break: break-all; }
 .toolbar { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .toolbar button { font: inherit; font-size: 12px; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
 .empty { padding: 20px; color: var(--muted); }
+nav.back { padding: 10px 32px 0; background: var(--panel); font-size: 12.5px; }
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
   aside { position: static; height: auto; max-height: 50vh; border-right: 0; border-bottom: 1px solid var(--line); }
-  header, main { padding-left: 16px; padding-right: 16px; }
+  header, main, nav.back { padding-left: 16px; padding-right: 16px; }
   .lists, .example { grid-template-columns: 1fr; } .example .arrow { display: none; }
   .sbs { grid-template-columns: 1fr; } .sbs .col + .col { border-left: 0; border-top: 1px solid var(--line); }
 }
 </style>
 </head>
 <body>
+<!--BACK-->
 <header id="hdr"></header>
 <div class="layout">
   <aside id="rail"></aside>

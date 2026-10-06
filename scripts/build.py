@@ -216,14 +216,19 @@ def embed(id_: str, obj) -> str:
     return f'<script id="{id_}" type="application/json">{safe}</script>'
 
 
-def render(facts: dict, narr: dict) -> str:
+def _esc(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
+
+
+def render(facts: dict, narr: dict, back_href: str | None = None) -> str:
     tpl = TEMPLATE.read_text(encoding="utf-8")
     if "<!--DATA-->" not in tpl:
         sys.exit(f"{TEMPLATE}: missing <!--DATA--> placeholder")
     title = (narr.get("goal") or {}).get("statement") or f"Session {facts['session']['id'][:8]}"
     title = title.replace("&", "&amp;").replace("<", "&lt;")
+    back = f'<nav class="back"><a href="{_esc(back_href)}">← all sessions</a></nav>' if back_href else ""
     return tpl.replace("<!--DATA-->", embed("facts", facts) + "\n" + embed("narrative", narr)) \
-              .replace("<!--TITLE-->", title[:120])
+              .replace("<!--TITLE-->", title[:120]).replace("<!--BACK-->", back)
 
 
 def main(argv=None) -> int:
@@ -232,6 +237,7 @@ def main(argv=None) -> int:
     ap.add_argument("narrative", nargs="?", help="omit or pass {} for a facts-only page")
     ap.add_argument("-o", "--out", default="dist/index.html")
     ap.add_argument("--check", action="store_true", help="validate only; write nothing")
+    ap.add_argument("--back", help="href for a '← all sessions' link (project mode)")
     a = ap.parse_args(argv)
 
     facts = json.loads(Path(a.facts).read_text(encoding="utf-8"))
@@ -252,7 +258,7 @@ def main(argv=None) -> int:
         return 0
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render(facts, narr), encoding="utf-8")
+    out.write_text(render(facts, narr, a.back), encoding="utf-8")
     print(f"wrote {out} ({out.stat().st_size // 1024} KB)", file=sys.stderr)
     return 0
 
