@@ -117,9 +117,10 @@ nav.back { padding: 10px 32px 0; background: var(--panel); font-size: 12.5px; }
 <!--BACK-->
 <header id="hdr"></header>
 <div class="layout">
-  <aside id="rail"></aside>
+  <aside id="rail" data-sec="timeline"></aside>
   <main id="main"></main>
 </div>
+<!--BLOCKS-->
 <!--DATA-->
 <script>
 (() => {
@@ -202,10 +203,10 @@ function header() {
       src && h("a", {href: "#ev-" + src, onclick: e => { e.preventDefault(); focusEvent(src); }}, "goal source")),
     g.completion_indicator ? h("div", {class: "indicator"}, h("b", {}, "Done when: "), g.completion_indicator)
       : h("div", {class: "indicator muted"}, Object.keys(N).length ? "" : "No narrative.json: showing extracted facts only."),
-    pct != null && h("div", {class: "progress"}, h("div", {class: "bar"}, h("i", {style: `width:${Math.max(0, Math.min(100, pct))}%`})),
+    pct != null && h("div", {class: "progress", "data-sec": "progress"}, h("div", {class: "bar"}, h("i", {style: `width:${Math.max(0, Math.min(100, pct))}%`})),
       h("b", {}, pct + "%")),
-    pct != null && basis && h("div", {class: "muted small", style: "max-width:720px;margin-top:4px"}, basis),
-    (p.done || p.remaining || tasks.length) && h("div", {class: "lists"},
+    pct != null && basis && h("div", {class: "muted small", style: "max-width:720px;margin-top:4px", "data-sec": "progress"}, basis),
+    (p.done || p.remaining || tasks.length) && h("div", {class: "lists", "data-sec": "progress"},
       h("div", {}, h("h4", {}, "Done"), h("ul", {}, (p.done || tasks.filter(t => t.status === "completed").map(t => t.subject)).map(x => h("li", {}, x)))),
       h("div", {}, h("h4", {}, "Remaining"), h("ul", {}, (p.remaining || tasks.filter(t => t.status !== "completed").map(t => t.subject)).map(x => h("li", {}, x))))));
 }
@@ -241,7 +242,7 @@ function timeline() {
       h("span", {class: "t"}, fmtTime(e.ts)), h("span", {class: "s"}, e.summary || e.kind),
       e.subagent && h("span", {class: "muted small"}, " · subagent"),
       fail && h("span", {class: "small", style: "color:var(--err)"}, " · failed"));
-    put(list, el, ls.map(l => h("div", {class: "lesson"}, l.learned)));
+    put(list, el, ls.map(l => h("div", {class: "lesson", "data-sec": "lessons"}, l.learned)));
   }
   put(rail,h("h2", {}, "Timeline"), filters, events.length ? list : h("div", {class: "empty"}, "No events."));
   apply();
@@ -372,13 +373,14 @@ function mainPanel() {
     return (wb[0] - wa[0]) || (wb[1] - wa[1]) || (wb[2] - wa[2]) || a.localeCompare(b);
   });
   const expand = h("button", {onclick: () => { const all = [...main.querySelectorAll("details.file")]; const open = !all.every(d => d.open); all.forEach(d => d.open = open); }}, "expand / collapse all");
-  put(main, h("div", {class: "toolbar"}, h("h2", {}, `Files (${paths.length})`), expand),
-    paths.length ? paths.map(fileCard) : h("div", {class: "panel empty"}, "No file changes."));
+  const B = load("blocks"), blocks = pos => window.SV_BLOCKS && Array.isArray(B) ? h("div", {class: "sv-blocks"}, window.SV_BLOCKS(B, pos)) : null;
+  put(main, blocks("top"), h("div", {"data-sec": "files"}, h("div", {class: "toolbar"}, h("h2", {}, `Files (${paths.length})`), expand),
+    paths.length ? paths.map(fileCard) : h("div", {class: "panel empty"}, "No file changes.")), blocks("bottom"));
   if ((N.files && paths.filter(p => nFiles[p]).length === 1) || paths.length === 1) { const d = main.querySelector("details.file"); if (d) d.open = true; }
   // extraction notes (transcript/git disagreements, failed tool calls): for the extractor and Claude, not the reader
   const disc = F.discrepancies || [], errs = events.filter(e => e.kind === "error");
   const goEv = id => e => { e.preventDefault(); focusEvent(id); };
-  if (disc.length || errs.length) put(main, h("details", {class: "panel diag"},
+  if (disc.length || errs.length) put(main, h("details", {class: "panel diag", "data-sec": "diagnostics"},
     h("summary", {}, `Diagnostics (${disc.length + errs.length})`,
       h("span", {class: "muted small"}, " · extraction notes, mostly for Claude")),
     h("div", {class: "inner"},

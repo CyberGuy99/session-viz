@@ -112,8 +112,9 @@ def test_back_link_only_in_project_mode():
     facts = {**FACTS, "session": {"id": "abcdef12"}}
     plain, linked = build.render(facts, {}), build.render(facts, {}, "../../index.html")
     assert "<!--BACK-->" not in plain and "all sessions" not in plain
-    assert '<nav class="back"><a href="../../index.html">' in linked
-    assert linked.replace(linked[linked.index('<nav class="back">'):linked.index("</nav>") + 6], "") == plain
+    assert '<nav class="back" data-sec="back"><a href="../../index.html">' in linked
+    assert linked.replace(linked[linked.index('<nav class="back"'):linked.index("</nav>") + 6], "") == plain
+    assert "<!--BLOCKS-->" not in plain and "SV_BLOCKS = " not in plain  # no site.json: no block assets
 
 
 def test_embed_escapes_and_base64(monkeypatch):
@@ -174,6 +175,20 @@ def test_merge_patch_and_lesson_append():
     assert "conf.json" not in out["files"] and set(out["files"]["calc.py"]["symbols"]) == {"parse"}
     assert [l["event_ref"] for l in out["lessons"]] == ["m1"]
     assert GOOD["progress"]["percent"] == 100  # input untouched
+
+
+def test_merge_patch_data_changes_append_remove():
+    new = {"what": "d=4", "why": "y (ev:e1)", "category": "accuracy"}
+    out = build.merge_patch(GOOD, {"files": {"conf.json": {"data_changes": {"append": [new]}}}})
+    assert [d["what"] for d in out["files"]["conf.json"]["data_changes"]] == ["c=3", "d=4"]  # order kept
+    assert out["files"]["conf.json"]["summary"] == "config"
+    out = build.merge_patch(out, {"files": {"conf.json": {"data_changes": {"remove": ["c=3"]}}}})
+    assert out["files"]["conf.json"]["data_changes"] == [new]
+    # on a file without data_changes yet, and plain arrays still replace
+    out = build.merge_patch(GOOD, {"files": {"calc.py": {"data_changes": {"append": [new]}}}})
+    assert out["files"]["calc.py"]["data_changes"] == [new]
+    assert build.merge_patch(GOOD, {"files": {"conf.json": {"data_changes": [new]}}})["files"]["conf.json"]["data_changes"] == [new]
+    assert build.validate(out, FACTS)[0] == []
 
 
 def test_prune_invalid_keeps_the_rest():

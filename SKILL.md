@@ -11,7 +11,7 @@ Pipeline: `extract.py` (deterministic facts) → **you** write a narrative patch
 
 ## 1. Resolve the session and output dir
 
-Arguments the user may give: `--session <path|latest>` (default `latest` = newest transcript for this cwd), `--since <sha>`, `--until <sha|worktree>` (end state; default is the last commit before the session ended when later commits exist, else the working tree).
+Arguments the user may give: project mode with an optional `--requests <file.md>` (see Project mode), `--session <path|latest>` (default `latest` = newest transcript for this cwd), `--since <sha>`, `--until <sha|worktree>` (end state; default is the last commit before the session ended when later commits exist, else the working tree).
 
 ```bash
 SID=$(basename "$(python3 $SV/scripts/extract.py --session latest --print-path)" .jsonl)   # or the given path
@@ -48,11 +48,12 @@ If `up_to_date` is true, skip to §4's build. Otherwise read only delta.json. It
 
 ## 3. Write `$OUT/narrative.patch.json`
 
-A first narrative is the whole document, written as a patch onto nothing. An update is a JSON merge patch onto the existing narrative: objects merge, `null` deletes a key, and arrays replace. The exception is `"lessons": {"append": [...], "remove": ["<event_ref>", ...]}`, so existing lessons needn't be resent. Example update:
+A first narrative is the whole document, written as a patch onto nothing. An update is a JSON merge patch onto the existing narrative: objects merge, `null` deletes a key, and arrays replace. The exceptions are `"lessons": {"append": [...], "remove": ["<event_ref>", ...]}` and a file's `"data_changes": {"append": [...], "remove": ["<what>", ...]}`, so existing items needn't be resent. Example update:
 
 ```jsonc
 {"progress": {"percent": 100, "remaining": [], "done": ["…all items, old and new…"]},
- "files": {"a.py": {"symbols": {"parse": {"now": "…", "example": {…}, "why": "… (ev:…)"}, "old_helper": null}}},
+ "files": {"a.py": {"symbols": {"parse": {"now": "…", "example": {…}, "why": "… (ev:…)"}, "old_helper": null}},
+           "README.md": {"data_changes": {"append": [{"what": "…", "why": "… (ev:…)", "category": "refactoring"}]}}},
  "lessons": {"append": [{"ts": "…", "event_ref": "…", "learned": "…"}]}}
 ```
 
@@ -128,5 +129,23 @@ python3 $SV/scripts/project.py            # or --project <repo path | ~/.claude/
 ```
 
 It extracts and builds every session (cached; only changed transcripts are redone) into `${SESSION_VIZ_OUT:-~/.cache/session-viz}/project-<encoded-cwd>/dist/`: `index.html` lists sessions, `s/<session-id>/index.html` is each report. A session's page includes its narrative from `$OUT/<session-id>/narrative.json` (§4 writes it). Entries that no longer match the facts are dropped and the rest still renders ("partial"). The page is facts-only only if the goal or progress itself is invalid. project.py prints each session whose narrative is missing, partial, or behind (newer events, or code changed since it was written), with its `/session-viz --session <path>` command. With an existing narrative, that run is the cheap delta path.
+
+### Special requests (`--requests <file.md>`)
+
+The user may pass a markdown file, often a freeform list, of extra content for the homepage or session pages, or things to remove. For example: "a table of the 5 best runs under an hour", "drop the cost chips", "show each session's test runs at the top". **Every time the skill runs with `--requests`, agree the result in plan mode before building**, even if the same file was used before:
+
+1. Run `project.py` once without changes so summaries and facts are fresh, and read the current `<project out>/site.json` if one exists (the previous agreement).
+2. Enter plan mode (EnterPlanMode tool; load it with ToolSearch if it's deferred). Read the requests file and `python3 $SV/scripts/project.py --catalog`, which lists the data sources and their fields, where-ops, derive expressions, aggregations, block kinds, formats and every hideable default section.
+3. In the plan, map each request to exactly one of:
+   - **computed block**: a `query` over a source, recomputed on every build. Prefer this for anything data-shaped.
+   - **authored block**: markdown or fixed table/list/stats written now, with `as_of`. Only for content no source has.
+   - **removal**: a `hide` id.
+   - **can't do as asked**: say why and offer the closest computed alternative.
+
+   Show the plan as a table: request → block (title, kind, position, source, filter/derive/sort/limit/columns) or hide id. Also list the defaults that stay. Make vague words concrete and put the definition in the block's `note`. For example, "best" might mean `progress - 10 * errors`, "runs" sessions, "recent" the last 7 days. Ask with AskUserQuestion when a definition is a real choice, not a guess. Keep previously agreed blocks unless a request changes or drops them.
+4. ExitPlanMode for approval, and iterate on the user's feedback.
+5. After approval, write `<project out>/site.json` (block shapes are in the `--catalog` output and `$SV/scripts/blocks.py`'s docstring). Then run `python3 $SV/scripts/project.py --check-site`. It validates the file and prints every block resolved against the real sessions. Fix errors and sanity-check the rows; an empty table usually means a filter is wrong. Then run `project.py` to build, and tell the user what each request became.
+
+Without `--requests`, project.py reuses the stored site.json as is.
 
 Relay that list to the user and offer to write narratives for the sessions they pick. For each, follow §1–§4 with `--session <that transcript path>` (§2 can reuse `$OUT/<sid>/facts.json`, which project.py already wrote), then re-run project.py. Publishing is §5 with the project dir: `$SV/scripts/publish.sh <project out>/dist project-<name>`. Ask first, as in §5.

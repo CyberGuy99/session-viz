@@ -104,6 +104,30 @@ def test_delta_reconstructs_coverage_for_narratives_without_meta(tmp_path):
     assert build.delta(narr, facts, build.reconstruct_meta(narr, facts))["up_to_date"]
 
 
+def test_site_json_blocks_and_hides_reach_both_pages(tmp_path, capsys):
+    _, proj = make_project(tmp_path)
+    site = {"home": {"hide": ["card.cost"], "blocks": [
+                {"id": "short", "title": "Short sessions", "kind": "table",
+                 "query": {"source": "sessions", "where": [["duration_s", "<", 3600]], "columns": ["id"]}}]},
+            "session": {"hide": ["lessons"], "blocks": [
+                {"id": "ev", "title": "Edits", "kind": "list",
+                 "query": {"source": "events", "where": [["kind", "=", "edit"]], "columns": ["summary"]}}]}}
+    (tmp_path / "site").mkdir()
+    (tmp_path / "site" / "site.json").write_text(json.dumps(site))  # default location: OUT/site.json
+    assert run(proj, tmp_path) == 0
+    home = (tmp_path / "site" / "dist" / "index.html").read_text()
+    assert '"title": "Short sessions"' in home and '[data-sec="card.cost"] { display: none' in home
+    page = (tmp_path / "site" / "dist" / "s" / "aaa" / "index.html").read_text()
+    assert "Write " in page.split('<script id="blocks"', 1)[1].split("</script>", 1)[0]
+    assert '[data-sec="lessons"] { display: none' in page
+
+    capsys.readouterr()
+    assert run(proj, tmp_path, "--check-site") == 0 and '"short"' in capsys.readouterr().out
+    site["home"]["hide"] = ["card.costs"]
+    (tmp_path / "site" / "site.json").write_text(json.dumps(site))
+    assert run(proj, tmp_path) == 2 and "is not hideable" in capsys.readouterr().err
+
+
 def test_cache_hits_and_selective_rebuild(tmp_path, capsys):
     _, proj = make_project(tmp_path)
     run(proj, tmp_path)

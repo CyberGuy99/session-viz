@@ -20,12 +20,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import blocks  # noqa: E402
 import build  # noqa: E402
 import extract  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "templates" / "project.html"
-CODE = [ROOT / "scripts" / "extract.py", ROOT / "scripts" / "build.py", ROOT / "templates" / "index.html"]
+CODE = [ROOT / "scripts" / "extract.py", ROOT / "scripts" / "build.py", ROOT / "scripts" / "blocks.py",
+        ROOT / "scripts" / "project.py",
+        ROOT / "templates" / "index.html", ROOT / "templates" / "blocks.js", ROOT / "templates" / "blocks.css"]
 KEY_VERSION = 1
 
 
@@ -60,13 +63,14 @@ def worktree_hash(repo: str) -> str:
     return _sha(diff + json.dumps(stats).encode())
 
 
-def cache_key(main: Path, cwd: str | None, narrative: Path, prev: dict) -> dict:
+def cache_key(main: Path, cwd: str | None, narrative: Path, prev: dict, site_session: dict | None = None) -> dict:
     """Everything a session's facts + page depend on. The worktree only matters while the
     session's end state is the worktree (no later commits)."""
     side = sorted(main.parent.glob("agent-*.jsonl")) + sorted((main.parent / main.stem).rglob("*.jsonl"))
     repo = (extract.git(cwd, "rev-parse", "--show-toplevel") or "").strip() if cwd and os.path.isdir(cwd) else ""
     key = {
         "v": KEY_VERSION,
+        "site": _sha(json.dumps(site_session or {}, sort_keys=True).encode()),
         "transcripts": [_stat(p) for p in [main, *side]],
         "code": [_sha(p.read_bytes()) for p in CODE],
         "narrative": _stat(narrative) if narrative.exists() else None,
@@ -151,6 +155,10 @@ def summarize(main: Path, records: list[dict], facts: dict, narr: dict, state: s
         "added_lines": sum(f.get("added_lines", 0) for f in changed),
         "removed_lines": sum(f.get("removed_lines", 0) for f in changed),
         "edits": sum(1 for e in events if e["kind"] == "edit"),
+        "files": [{"path": p, "status": f.get("status"), "language": f.get("language"),
+                   "added_lines": f.get("added_lines", 0), "removed_lines": f.get("removed_lines", 0),
+                   "edits": f.get("mutation_count", 0)}
+                  for p, f in sorted(facts["files"].items()) if f.get("status") != "unchanged"],
         "test_runs": len(tests), "tests_failed": sum(1 for e in tests if e.get("tests_failed")),
         "tests_last_failed": bool(tests and tests[-1].get("tests_failed")),
         "errors": sum(1 for e in events if e["kind"] == "error"),
@@ -174,8 +182,16 @@ def write_if_changed(path: Path, text: str) -> bool:
     return True
 
 
-def process(main: Path, cache: Path, dist: Path, force: bool) -> tuple[dict | None, str]:
+def session_site(site: dict, facts: dict) -> dict:
+    """site.json's session section resolved against one session's facts, for build.render()."""
+    sec = site.get("session") or {}
+    return {"blocks": blocks.resolve(sec.get("blocks") or [], lambda src: blocks.session_rows(src, facts)),
+            "hide": sec.get("hide") or []}
+
+
+def process(main: Path, cache: Path, dist: Path, force: bool, site: dict | None = None) -> tuple[dict | None, str]:
     """(summary or None if the transcript has no human prompt, cached|built|skipped|failed)."""
+    site = site or {}
     sdir = cache / main.stem
     key_file, sum_file, facts_file = sdir / "build.key.json", sdir / "summary.json", sdir / "facts.json"
     page = dist / "s" / main.stem / "index.html"
@@ -187,7 +203,7 @@ def process(main: Path, cache: Path, dist: Path, force: bool) -> tuple[dict | No
     else:
         records = extract.load_jsonl(main)
         cwd = next((r["cwd"] for r in records if r.get("cwd")), None)
-    key = cache_key(main, cwd, sdir / "narrative.json", prev)
+    key = cache_key(main, cwd, sdir / "narrative.json", prev, site.get("session"))
     if not force and prev.get("key") == key and prev_sum is not None and (prev_sum == {} or page.exists()):
         return prev_sum or None, "cached"
 
@@ -200,28 +216,51 @@ def process(main: Path, cache: Path, dist: Path, force: bool) -> tuple[dict | No
         facts_file.write_text(json.dumps(facts, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
                               encoding="utf-8")
         narr, state, errors, behind = narrative_state(sdir / "narrative.json", facts)
-        write_if_changed(page, build.render(facts, narr, "../../index.html"))
+        write_if_changed(page, build.render(facts, narr, "../../index.html", session_site(site, facts)))
         summary = summarize(main, records, facts, narr, state, errors, behind, f"s/{main.stem}/index.html")
         status = "built"
     sdir.mkdir(parents=True, exist_ok=True)
     sum_file.write_text(json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
     end_ref = (summary or {}).get("end_ref")
     if end_ref == "worktree" and "worktree" not in key and cwd:  # first build: key it on the worktree now
-        key = cache_key(main, cwd, sdir / "narrative.json", {"end_ref": "worktree"})
+        key = cache_key(main, cwd, sdir / "narrative.json", {"end_ref": "worktree"}, site.get("session"))
     key_file.write_text(json.dumps({"key": key, "end_ref": end_ref}, indent=2, sort_keys=True) + "\n")
     return summary or None, status
 
 
 # ───────────────────────── index ─────────────────────────
 
-def render_index(proj: Path, sessions: list[dict]) -> str:
+def home_blocks(site: dict, sessions: list[dict]) -> list[dict]:
+    return blocks.resolve((site.get("home") or {}).get("blocks") or [], lambda src: blocks.home_rows(src, sessions))
+
+
+def render_index(proj: Path, sessions: list[dict], site: dict | None = None) -> str:
+    site = site or {}
     sessions = sorted(sessions, key=lambda s: (s["start"] or "", s["id"]), reverse=True)
     cwd = next((s["cwd"] for s in sessions if s.get("cwd")), None)
     data = {"project": {"dir": str(proj), "cwd": cwd, "name": Path(cwd).name if cwd else proj.name},
-            "sessions": sessions}
+            "sessions": [{k: v for k, v in s.items() if k != "files"} for s in sessions]}
     tpl = TEMPLATE.read_text(encoding="utf-8")
     title = f"{data['project']['name']}: Claude Code sessions".replace("&", "&amp;").replace("<", "&lt;")
-    return tpl.replace("<!--DATA-->", build.embed("project", data)).replace("<!--TITLE-->", title)
+    assets = build.site_assets(home_blocks(site, sessions), (site.get("home") or {}).get("hide") or [])
+    return tpl.replace("<!--DATA-->", build.embed("project", data)).replace("<!--TITLE-->", title) \
+              .replace("<!--BLOCKS-->", assets)
+
+
+def check_site(site: dict, site_path: Path, mains: list[Path], cache: Path) -> int:
+    """Preview: home blocks over the cached summaries, session blocks over the newest session's facts."""
+    sums = [json.loads(p.read_text()) for m in mains if (p := cache / m.stem / "summary.json").exists()]
+    sums = [s for s in sums if s]
+    if not sums:
+        print("no cached sessions yet: run project.py once without --check-site", file=sys.stderr)
+        return 1
+    newest = max(sums, key=lambda s: s.get("start") or "")
+    facts = json.loads((cache / newest["id"] / "facts.json").read_text())
+    preview = {"home": home_blocks(site, sums), f"session {newest['id'][:8]}": session_site(site, facts)["blocks"],
+               "hidden": {k: (site.get(k) or {}).get("hide", []) for k in ("home", "session")}}
+    print(json.dumps(preview, indent=1, ensure_ascii=False, default=str))
+    print(f"{site_path}: valid", file=sys.stderr)
+    return 0
 
 
 def main(argv=None) -> int:
@@ -231,8 +270,16 @@ def main(argv=None) -> int:
     ap.add_argument("-o", "--out", help="site output dir; the site is OUT/dist (default: CACHE/project-<encoded>)")
     ap.add_argument("--force", action="store_true", help="re-extract every session, ignoring the cache")
     ap.add_argument("--only", nargs="+", metavar="SID", help="limit the site to these session ids (prefixes ok)")
+    ap.add_argument("--site", help="customizations agreed from a special-requests file (default: OUT/site.json)")
+    ap.add_argument("--catalog", action="store_true",
+                    help="print what site.json can use (sources, fields, block kinds, hideable sections) and exit")
+    ap.add_argument("--check-site", action="store_true",
+                    help="validate site.json and print its blocks resolved against the cached sessions; write nothing")
     a = ap.parse_args(argv)
 
+    if a.catalog:
+        print(json.dumps(blocks.catalog(), indent=1))
+        return 0
     proj = project_dir(a.project)
     mains = main_transcripts(proj) if proj.is_dir() else []
     if a.only:
@@ -243,11 +290,24 @@ def main(argv=None) -> int:
     cache = Path(a.cache or os.environ.get("SESSION_VIZ_OUT") or Path.home() / ".cache" / "session-viz").expanduser()
     out = Path(a.out).expanduser() if a.out else cache / f"project-{proj.name.lstrip('-')}"
     dist = out / "dist"
+    site_path = Path(a.site).expanduser() if a.site else out / "site.json"
+    try:
+        site = blocks.load(site_path)
+    except json.JSONDecodeError as e:
+        print(f"{site_path}: invalid JSON: {e}", file=sys.stderr)
+        return 2
+    errs = blocks.validate_site(site)
+    if errs:
+        print("\n".join(f"ERROR {e}" for e in errs) + f"\n\n{site_path}: {len(errs)} error(s); nothing built.",
+              file=sys.stderr)
+        return 2
+    if a.check_site:
+        return check_site(site, site_path, mains, cache)
 
     sessions, counts = [], {}
     for m in mains:
         try:
-            s, status = process(m, cache, dist, a.force)
+            s, status = process(m, cache, dist, a.force, site)
         except Exception as e:  # one bad transcript must not sink the whole site
             print(f"FAILED {m.stem}: {type(e).__name__}: {e}", file=sys.stderr)
             s, status = None, "failed"
@@ -259,7 +319,7 @@ def main(argv=None) -> int:
     for d in sorted((dist / "s").glob("*")) if (dist / "s").is_dir() else []:
         if d.is_dir() and d.name not in keep:  # transcript deleted, or excluded by --only
             shutil.rmtree(d)
-    write_if_changed(dist / "index.html", render_index(proj, sessions))
+    write_if_changed(dist / "index.html", render_index(proj, sessions, site))
 
     print(", ".join(f"{n} {k}" for k, n in sorted(counts.items())) + f" → {dist / 'index.html'}", file=sys.stderr)
     todo = [s for s in sorted(sessions, key=lambda s: s["start"] or "") if s["regen"]]

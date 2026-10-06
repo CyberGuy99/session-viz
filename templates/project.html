@@ -62,12 +62,15 @@ details.regen pre { background: var(--soft); border-radius: 6px; padding: 8px 10
 <body>
 <header id="hdr"></header>
 <main>
+  <div class="sv-blocks" id="blocks-top"></div>
   <div class="toolbar">
-    <input id="q" type="search" placeholder="Search titles and prompts" aria-label="Search sessions">
-    <div class="filters" id="filters"></div>
+    <input id="q" type="search" placeholder="Search titles and prompts" aria-label="Search sessions" data-sec="search">
+    <div class="filters" id="filters" data-sec="filters"></div>
   </div>
-  <div id="list"></div>
+  <div id="list" data-sec="sessions"></div>
+  <div class="sv-blocks" id="blocks-bottom"></div>
 </main>
+<!--BLOCKS-->
 <!--DATA-->
 <script>
 (() => {
@@ -100,8 +103,15 @@ document.getElementById("hdr").append(
     P.cwd && h("span", { class: "mono" }, P.cwd),
     h("span", null, `${sessions.length} session${sessions.length === 1 ? "" : "s"}`),
     starts.length && h("span", null, `${date(starts[0])} – ${date(starts[starts.length - 1])}`),
-    cost > 0 && h("span", null, `${usd(cost)} total`),
-    h("span", null, `${withNarr}/${sessions.length} with narrative`)));
+    cost > 0 && h("span", { "data-sec": "header.cost" }, `${usd(cost)} total`),
+    h("span", { "data-sec": "header.narratives" }, `${withNarr}/${sessions.length} with narrative`)));
+
+// site.json blocks (project.py resolves them; blocks.js renders)
+if (window.SV_BLOCKS) {
+  const be = document.getElementById("blocks"), B = be ? JSON.parse(be.dataset.encoding === "base64"
+    ? new TextDecoder().decode(Uint8Array.from(atob(be.textContent), c => c.charCodeAt(0))) : be.textContent) : [];
+  for (const pos of ["top", "bottom"]) document.getElementById("blocks-" + pos).append(window.SV_BLOCKS(B, pos));
+}
 
 // filters
 const FILTERS = [
@@ -118,38 +128,38 @@ q.addEventListener("input", () => draw());
 
 function card(s) {
   const chips = [
-    h("span", { class: "chip" }, `${s.turns} turn${s.turns === 1 ? "" : "s"}`),
-    h("span", { class: "chip" }, dur(s.duration_s)),
-    s.files_changed > 0 && h("span", { class: "chip" }, `${s.files_changed} file${s.files_changed === 1 ? "" : "s"} `,
+    h("span", { class: "chip", "data-sec": "card.turns" }, `${s.turns} turn${s.turns === 1 ? "" : "s"}`),
+    h("span", { class: "chip", "data-sec": "card.duration" }, dur(s.duration_s)),
+    s.files_changed > 0 && h("span", { class: "chip", "data-sec": "card.files" }, `${s.files_changed} file${s.files_changed === 1 ? "" : "s"} `,
       h("span", { class: "add" }, `+${s.added_lines}`), " ", h("span", { class: "del" }, `−${s.removed_lines}`)),
-    s.test_runs > 0 && h("span", { class: "chip " + (s.tests_last_failed ? "warn" : "ok"),
+    s.test_runs > 0 && h("span", { class: "chip " + (s.tests_last_failed ? "warn" : "ok"), "data-sec": "card.tests",
       title: `${s.test_runs} test run${s.test_runs === 1 ? "" : "s"}, ${s.tests_failed} failed along the way` },
       s.tests_last_failed ? "tests failing" : "tests passing"),
-    s.tasks_total > 0 && h("span", { class: "chip" }, `tasks ${s.tasks_done}/${s.tasks_total}`),
-    s.subagents > 0 && h("span", { class: "chip" }, `${s.subagents} subagent${s.subagents === 1 ? "" : "s"}`),
-    s.branch && h("span", { class: "chip mono" }, s.branch),
-    s.cost_usd != null && h("span", { class: "chip" }, usd(s.cost_usd)),
+    s.tasks_total > 0 && h("span", { class: "chip", "data-sec": "card.tasks" }, `tasks ${s.tasks_done}/${s.tasks_total}`),
+    s.subagents > 0 && h("span", { class: "chip", "data-sec": "card.subagents" }, `${s.subagents} subagent${s.subagents === 1 ? "" : "s"}`),
+    s.branch && h("span", { class: "chip mono", "data-sec": "card.branch" }, s.branch),
+    s.cost_usd != null && h("span", { class: "chip", "data-sec": "card.cost" }, usd(s.cost_usd)),
     s.compacted && h("span", { class: "chip warn", title: "Transcript was /compact-ed; early edits need --since" }, "compacted"),
-    (s.errors + s.discrepancies) > 0 && h("span", { class: "chip diag", title:
+    (s.errors + s.discrepancies) > 0 && h("span", { class: "chip diag", "data-sec": "card.diagnostics", title:
       `${s.errors} failed tool call${s.errors === 1 ? "" : "s"}` +
       (s.errors ? ` (${s.errors_with_lessons || 0} explained by lessons)` : "") +
       `, ${s.discrepancies} transcript/git discrepanc${s.discrepancies === 1 ? "y" : "ies"}. ` +
       "Extraction notes, mostly for Claude: see Diagnostics at the bottom of the report." },
       `${s.errors + s.discrepancies} diagnostic${s.errors + s.discrepancies === 1 ? "" : "s"}`),
-    s.narrative === "ok" ? h("span", { class: "chip ok" }, "narrative")
-      : s.narrative === "partial" ? h("span", { class: "chip warn", title: (s.narrative_errors || []).join("\n") }, "narrative (partial)")
-      : h("span", { class: "chip warn" }, s.narrative === "stale" ? "narrative out of date" : "facts only"),
+    s.narrative === "ok" ? h("span", { class: "chip ok", "data-sec": "card.narrative" }, "narrative")
+      : s.narrative === "partial" ? h("span", { class: "chip warn", "data-sec": "card.narrative", title: (s.narrative_errors || []).join("\n") }, "narrative (partial)")
+      : h("span", { class: "chip warn", "data-sec": "card.narrative" }, s.narrative === "stale" ? "narrative out of date" : "facts only"),
   ];
   const b = s.narrative_behind || {};
   const showPrompt = s.first_prompt && s.first_prompt !== s.title;
   return h("div", { class: "card", id: "s-" + s.id },
     h("h3", null, h("a", { href: s.href }, s.title || s.id)),
     h("div", { class: "meta" }, h("span", null, date(s.start)), h("span", { class: "mono" }, s.id.slice(0, 8))),
-    showPrompt && h("div", { class: "prompt" }, s.first_prompt),
+    showPrompt && h("div", { class: "prompt", "data-sec": "card.prompt" }, s.first_prompt),
     h("div", { class: "chips" }, chips),
-    s.progress != null && h("div", { class: "progress" },
+    s.progress != null && h("div", { class: "progress", "data-sec": "card.progress" },
       h("div", { class: "bar" }, h("i", { style: `width:${Math.max(0, Math.min(100, s.progress))}%` })), `${s.progress}% to goal`),
-    s.regen && s.regen.length > 0 && h("details", { class: "regen" },
+    s.regen && s.regen.length > 0 && h("details", { class: "regen", "data-sec": "card.regen" },
       h("summary", null,
         s.narrative === "missing" ? "No narrative yet: how to generate one"
         : s.narrative === "stale" ? "Narrative no longer matches the facts: how to regenerate"

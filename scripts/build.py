@@ -299,21 +299,35 @@ def delta(narr: dict, facts: dict, meta: dict | None) -> dict:
             "progress": narr.get("progress"), "files": ctx}
 
 
-def merge_patch(target, patch, top: bool = True):
-    """RFC 7386 merge patch (null deletes, arrays replace), plus top-level
-    "lessons": {"append": [...], "remove": [event_ref, ...]} so lessons needn't be resent."""
+def _list_op(path: tuple) -> tuple[str, bool] | None:
+    """Lists a patch may edit with {"append": [...], "remove": [id, ...]} instead of resending them:
+    (item field that identifies an item for "remove", keep sorted by ts)."""
+    if path == ("lessons",):
+        return "event_ref", True
+    if len(path) == 3 and path[0] == "files" and path[2] == "data_changes":
+        return "what", False
+    return None
+
+
+def merge_patch(target, patch, path: tuple = ()):
+    """RFC 7386 merge patch (null deletes, arrays replace), plus {"append": [...], "remove": [...]} for
+    `lessons` (removed by event_ref) and `files.<path>.data_changes` (removed by `what`), so existing
+    items needn't be resent."""
     if not isinstance(patch, dict):
         return patch
     out = dict(target) if isinstance(target, dict) else {}
     for k, v in patch.items():
+        here = (*path, k)
+        op = _list_op(here)
         if v is None:
             out.pop(k, None)
-        elif top and k == "lessons" and isinstance(v, dict):
+        elif op and isinstance(v, dict):
+            key, by_ts = op
             drop = set(v.get("remove", []))
-            kept = [l for l in out.get("lessons", []) if l.get("event_ref") not in drop]
-            out["lessons"] = sorted(kept + v.get("append", []), key=lambda l: l.get("ts", ""))
+            items = [x for x in out.get(k) or [] if x.get(key) not in drop] + v.get("append", [])
+            out[k] = sorted(items, key=lambda x: x.get("ts", "")) if by_ts else items
         else:
-            out[k] = merge_patch(out.get(k), v, False)
+            out[k] = merge_patch(out.get(k), v, here)
     return out
 
 
@@ -364,15 +378,30 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
 
 
-def render(facts: dict, narr: dict, back_href: str | None = None) -> str:
+def site_assets(blocks: list[dict], hide: list[str]) -> str:
+    """Inline block renderer + styles + data, and CSS that removes hidden default sections ('' if neither)."""
+    if not blocks and not hide:
+        return ""
+    css = (TEMPLATE.parent / "blocks.css").read_text(encoding="utf-8")
+    css += "".join(f'\n[data-sec="{_esc(h)}"] {{ display: none !important; }}' for h in sorted(set(hide)))
+    if "timeline" in hide:  # the report's two-column grid would otherwise keep an empty rail column
+        css += "\n.layout { grid-template-columns: minmax(0, 1fr) !important; }"
+    js = (TEMPLATE.parent / "blocks.js").read_text(encoding="utf-8")
+    return f"<style>\n{css}\n</style>\n{embed('blocks', blocks)}\n<script>\n{js}</script>"
+
+
+def render(facts: dict, narr: dict, back_href: str | None = None, site: dict | None = None) -> str:
+    """site: {"blocks": resolved blocks, "hide": [section ids]} for project-mode customizations."""
     tpl = TEMPLATE.read_text(encoding="utf-8")
     if "<!--DATA-->" not in tpl:
         sys.exit(f"{TEMPLATE}: missing <!--DATA--> placeholder")
     title = (narr.get("goal") or {}).get("statement") or f"Session {facts['session']['id'][:8]}"
     title = title.replace("&", "&amp;").replace("<", "&lt;")
-    back = f'<nav class="back"><a href="{_esc(back_href)}">← all sessions</a></nav>' if back_href else ""
+    back = f'<nav class="back" data-sec="back"><a href="{_esc(back_href)}">← all sessions</a></nav>' if back_href else ""
+    site = site or {}
     return tpl.replace("<!--DATA-->", embed("facts", facts) + "\n" + embed("narrative", narr)) \
-              .replace("<!--TITLE-->", title[:120]).replace("<!--BACK-->", back)
+              .replace("<!--TITLE-->", title[:120]).replace("<!--BACK-->", back) \
+              .replace("<!--BLOCKS-->", site_assets(site.get("blocks") or [], site.get("hide") or []))
 
 
 def main(argv=None) -> int:
