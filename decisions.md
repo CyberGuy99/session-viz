@@ -82,3 +82,9 @@ The user set up Access with the one-click workers.dev / Preview URLs toggles and
 
 ## 2026-10-06 — §7.4 confirmed end to end
 The first login to the report URL failed with "That account does not have access". The workers.dev application's policy was correct (the placeholder loaded after login), but the separate **Preview URLs** application had its own policy that didn't include the user's email. After that policy was fixed, the user logged in and saw the report. Lesson: the two toggles create two Access applications with independent policies, and per-session reports live on the preview one. README § Hosting step 6 now says so. PLAN §7 is complete.
+
+## 2026-10-06 — `#f-` deep-link blank band was a headless artifact
+Headless Chromium screenshots of `index.html#f-<path>` showed a large empty band above the expanded card. The user loaded the deep link in Firefox and the card opened correctly at the top with no gap. No code change; don't trust headless `--screenshot` for scroll-position checks.
+
+## 2026-10-06 — Access deny path verified without a second account
+There was no second Cloudflare account to test refusal. Evidence instead: (1) before its policy was fixed, the Preview URLs application denied the user's own Cloudflare account with "That account does not have access", so non-matching identities are refused; (2) the user confirmed both applications have a single Allow policy whose Include is only Emails = rushilcd@gmail.com, rushilcd@umd.edu, with no Everyone / domain / login-method rules.
