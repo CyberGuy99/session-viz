@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "session-viz/narrative.schema.json",
+  "title": "session-viz narrative",
+  "description": "Claude-written judgment layer over facts.json. Evidence citations use the form (ev:<event uuid>) inside text fields.",
+  "type": "object",
+  "required": ["goal", "progress", "files", "lessons"],
+  "additionalProperties": false,
+  "$defs": {
+    "category": {"type": "string", "enum": ["accuracy", "speed", "refactoring"]},
+    "cited": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\(ev:[A-Za-z0-9_-]+(, ?ev:[A-Za-z0-9_-]+)*\\)",
+      "description": "Must contain at least one (ev:<uuid>) or grouped (ev:<uuid>, ev:<uuid>) citation of facts.events uuids."
+    }
+  },
+  "properties": {
+    "goal": {
+      "type": "object",
+      "required": ["statement", "completion_indicator", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "statement": {"type": "string", "minLength": 1},
+        "completion_indicator": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "pattern": "^user_msg#[A-Za-z0-9_-]+$"}
+      }
+    },
+    "progress": {
+      "type": "object",
+      "required": ["percent", "basis", "done", "remaining"],
+      "additionalProperties": false,
+      "properties": {
+        "percent": {"type": "integer", "minimum": 0, "maximum": 100},
+        "basis": {"type": "string", "minLength": 1},
+        "done": {"type": "array", "items": {"type": "string"}},
+        "remaining": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["summary"],
+        "additionalProperties": false,
+        "properties": {
+          "summary": {"type": "string", "minLength": 1},
+          "symbols": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["was", "now", "example", "category", "why"],
+              "additionalProperties": false,
+              "properties": {
+                "was": {"type": "string", "maxLength": 400},
+                "now": {"type": "string", "maxLength": 400},
+                "example": {
+                  "type": "object",
+                  "required": ["before", "after"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "before": {"type": "string", "maxLength": 300},
+                    "after": {"type": "string", "minLength": 1, "maxLength": 300}
+                  }
+                },
+                "category": {"$ref": "#/$defs/category"},
+                "why": {"$ref": "#/$defs/cited"}
+              }
+            }
+          },
+          "data_changes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["what", "why", "category"],
+              "additionalProperties": false,
+              "properties": {
+                "what": {"type": "string", "minLength": 1},
+                "why": {"$ref": "#/$defs/cited"},
+                "category": {"$ref": "#/$defs/category"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "lessons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ts", "event_ref", "learned"],
+        "additionalProperties": false,
+        "properties": {
+          "ts": {"type": "string"},
+          "event_ref": {"type": "string", "minLength": 1},
+          "learned": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><!--TITLE--></title>
+<style>
+:root {
+  --bg: #fbfbfa; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e3df; --soft: #f3f2ef;
+  --accent: #3a5ccc; --add-bg: #e6f4ea; --add-ink: #1e6b34; --del-bg: #fbe9e7; --del-ink: #a1301f;
+  --acc: #2f8a4c; --spd: #2f6fcc; --ref: #8a8a84; --warn: #b7791f; --err: #c0392b; --lesson: #fff6dd;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --panel: #1f1f1d; --ink: #ecebe7; --muted: #9c9b95; --line: #33332f; --soft: #2a2a27;
+    --accent: #8ea6ff; --add-bg: #173323; --add-ink: #8fe0a8; --del-bg: #3a1d19; --del-ink: #ffaa9c;
+    --acc: #5cc27c; --spd: #6ea2f0; --ref: #a3a39c; --warn: #e0a84a; --err: #ff7b6b; --lesson: #3a321b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161615; --panel: #1f1f1d; --ink: #ecebe7; --muted: #9c9b95; --line: #33332f; --soft: #2a2a27;
+  --accent: #8ea6ff; --add-bg: #173323; --add-ink: #8fe0a8; --del-bg: #3a1d19; --del-ink: #ffaa9c;
+  --acc: #5cc27c; --spd: #6ea2f0; --ref: #a3a39c; --warn: #e0a84a; --err: #ff7b6b; --lesson: #3a321b;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); }
+code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
+a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+header { padding: 28px 32px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { margin: 0 0 6px; font-size: 22px; line-height: 1.3; font-weight: 650; }
+.meta { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.indicator { margin: 8px 0 14px; } .indicator b { font-weight: 600; }
+.progress { display: flex; align-items: center; gap: 12px; max-width: 720px; }
+.bar { flex: 1; height: 8px; background: var(--soft); border-radius: 99px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+.lists { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 32px; max-width: 900px; margin-top: 10px; font-size: 13px; }
+.lists ul { margin: 2px 0 0; padding-left: 18px; } .lists h4 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 0; }
+aside { border-right: 1px solid var(--line); height: calc(100vh - 0px); position: sticky; top: 0; overflow-y: auto; padding: 16px 14px 40px; }
+main { padding: 20px 32px 80px; min-width: 0; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 8px 0 10px; font-weight: 600; }
+.filters { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.filters button { font: inherit; font-size: 11.5px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 99px; padding: 1px 9px; cursor: pointer; }
+.filters button.on { color: var(--ink); border-color: var(--ink); }
+.ev { position: relative; padding: 4px 6px 4px 18px; border-radius: 6px; font-size: 12.5px; cursor: default; }
+.ev::before { content: ""; position: absolute; left: 5px; top: 10px; width: 7px; height: 7px; border-radius: 50%; background: var(--ref); }
+.ev.k-edit::before { background: var(--accent); } .ev.k-error::before { background: var(--err); }
+.ev.k-test_run::before { background: var(--acc); } .ev.k-test_run.fail::before { background: var(--err); }
+.ev.k-user_msg::before { background: var(--warn); border-radius: 2px; }
+.ev.clickable { cursor: pointer; } .ev.clickable:hover { background: var(--soft); }
+.ev .t { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-right: 6px; }
+.ev.flash, .sym.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ev.k-user_msg .s { font-weight: 600; }
+.turn { font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); margin: 10px 0 4px; padding-top: 6px; }
+.lesson { background: var(--lesson); border-radius: 6px; padding: 6px 8px; margin: 3px 0 6px 18px; font-size: 12.5px; }
+.lesson::before { content: "Lesson · "; font-weight: 600; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; }
+details.file > summary { list-style: none; cursor: pointer; padding: 12px 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+details.file > summary::-webkit-details-marker { display: none; }
+details.file > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+details.file[open] > summary::before { transform: rotate(90deg); }
+.path { font-family: var(--mono); font-weight: 600; font-size: 13px; }
+.stat { font-family: var(--mono); font-size: 11.5px; } .stat .a { color: var(--add-ink); } .stat .d { color: var(--del-ink); }
+.fbody { padding: 0 16px 14px; }
+.summary { margin: 0 0 10px; }
+.badge { font-size: 11px; padding: 0 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.badge.added { color: var(--add-ink); border-color: currentColor; } .badge.removed, .badge.deleted { color: var(--del-ink); border-color: currentColor; }
+.badge.modified { color: var(--accent); border-color: currentColor; } .badge.renamed { color: var(--warn); border-color: currentColor; }
+.chip { font-size: 11px; padding: 1px 8px; border-radius: 4px; color: #fff; }
+.chip.accuracy { background: var(--acc); } .chip.speed { background: var(--spd); } .chip.refactoring { background: var(--ref); }
+.sym { border-top: 1px solid var(--line); padding: 12px 0 10px; }
+.symhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.symhead .q { font-family: var(--mono); font-weight: 600; }
+.aspects { font-size: 11.5px; color: var(--muted); }
+.wn { display: grid; grid-template-columns: 52px 1fr; gap: 2px 10px; margin: 8px 0 4px; font-size: 13.5px; }
+.wn .l { color: var(--muted); font-size: 12px; padding-top: 1px; }
+.example { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: stretch; margin: 6px 0; }
+.example pre { margin: 0; padding: 6px 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+.example .b { background: var(--del-bg); } .example .af { background: var(--add-bg); }
+.example .arrow { align-self: center; color: var(--muted); }
+.why { font-size: 13px; margin: 4px 0; } .why .l { color: var(--muted); }
+.cite { font-family: var(--mono); font-size: 11px; background: var(--soft); border-radius: 4px; padding: 0 5px; }
+details.diff { margin-top: 6px; } details.diff > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.sbs { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 6px; overflow: auto; max-height: 520px; margin-top: 6px; }
+.sbs .col { min-width: 0; }
+.sbs .ln { display: grid; grid-template-columns: 38px 1fr; font-family: var(--mono); font-size: 12px; line-height: 1.45; }
+.sbs .ln > span:first-child { color: var(--muted); text-align: right; padding-right: 6px; user-select: none; }
+.sbs .ln > span:last-child { white-space: pre-wrap; word-break: break-all; padding-right: 8px; }
+.sbs .ln.del { background: var(--del-bg); } .sbs .ln.add { background: var(--add-bg); } .sbs .ln.gap { background: var(--soft); }
+.sbs .col + .col { border-left: 1px solid var(--line); }
+pre.udiff { margin: 6px 0 0; padding: 8px 0; border: 1px solid var(--line); border-radius: 6px; overflow: auto; max-height: 520px; }
+pre.udiff span { display: block; padding: 0 10px; white-space: pre; }
+pre.udiff .add { background: var(--add-bg); } pre.udiff .del { background: var(--del-bg); } pre.udiff .hunk { color: var(--muted); }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin: 6px 0; }
+th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 4px 8px; vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
+td code { word-break: break-all; }
+.muted { color: var(--muted); } .small { font-size: 12px; }
+.disc { border-color: var(--warn); } .disc h2 { color: var(--warn); margin: 0; }
+.disc .inner { padding: 12px 16px; }
+.toolbar { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.toolbar button { font: inherit; font-size: 12px; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+.empty { padding: 20px; color: var(--muted); }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  aside { position: static; height: auto; max-height: 50vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  header, main { padding-left: 16px; padding-right: 16px; }
+  .lists, .example { grid-template-columns: 1fr; } .example .arrow { display: none; }
+  .sbs { grid-template-columns: 1fr; } .sbs .col + .col { border-left: 0; border-top: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<header id="hdr"></header>
+<div class="layout">
+  <aside id="rail"></aside>
+  <main id="main"></main>
+</div>
+<!--DATA-->
+<script>
+(() => {
+"use strict";
+const load = id => {
+  const el = document.getElementById(id);
+  if (!el || !el.textContent.trim()) return {};
+  let s = el.textContent;
+  if (el.dataset.encoding === "base64") s = new TextDecoder().decode(Uint8Array.from(atob(s), c => c.charCodeAt(0)));
+  try { return JSON.parse(s); } catch (e) { console.error(id, e); return {}; }
+};
+const F = load("facts"), N = load("narrative");
+const S = F.session || {}, events = F.events || [], files = F.files || {}, tasks = F.tasks || [];
+const nFiles = N.files || {};
+const evById = Object.fromEntries(events.map(e => [e.uuid, e]));
+
+// append children, flattening arrays and skipping null/false/"" (so `cond && node` is safe)
+function put(el, ...kids) {
+  for (const k of kids.flat(Infinity)) if (k != null && k !== false && k !== "") el.append(k instanceof Node ? k : String(k));
+  return el;
+}
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  return put(el, ...kids);
+}
+const fmtTime = ts => ts ? new Date(ts).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "";
+const fmtDur = s => s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m` : `${Math.round(s / 60)}m`;
+const fid = p => "f-" + p.replace(/[^A-Za-z0-9]/g, "_");
+const sid = (p, q) => fid(p) + "--" + q.replace(/[^A-Za-z0-9]/g, "_");
+
+// "text (ev:a) more (ev:b, ev:c)" → text nodes + citation links into the timeline
+function cited(text) {
+  const out = []; let last = 0;
+  for (const m of (text || "").matchAll(/\(ev:[A-Za-z0-9_-]+(?:, ?ev:[A-Za-z0-9_-]+)*\)/g)) {
+    out.push(text.slice(last, m.index));
+    for (const [, id] of m[0].matchAll(/ev:([A-Za-z0-9_-]+)/g)) {
+      const e = evById[id];
+      out.push(h("a", {class: "cite", href: "#ev-" + id, title: e ? e.summary : "unknown event",
+        onclick: ev => { ev.preventDefault(); focusEvent(id); }}, e ? `${e.kind} · ${fmtTime(e.ts)}` : id.slice(0, 8)), " ");
+    }
+    last = m.index + m[0].length;
+  }
+  out.push(text ? text.slice(last) : "");
+  return out;
+}
+function flash(el) { el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1600); }
+function focusEvent(uuid) {
+  const el = document.getElementById("ev-" + uuid);
+  if (el) { el.hidden = false; el.scrollIntoView({block: "center", behavior: "smooth"}); flash(el); }
+}
+function focusFile(path) {
+  const el = document.getElementById(fid(path));
+  if (el) { el.open = true; el.scrollIntoView({block: "start", behavior: "smooth"}); flash(el); }
+}
+
+// ── header ──
+function header() {
+  const g = N.goal || {}, p = N.progress || {};
+  const goal = g.statement || (S.goal_candidate && S.goal_candidate.text) || "Session " + (S.id || "").slice(0, 8);
+  const done = tasks.filter(t => t.status === "completed").length;
+  const pct = tasks.length ? Math.round(100 * done / tasks.length) : (p.percent ?? null);
+  const basis = tasks.length ? `${done}/${tasks.length} tasks completed` : (p.basis || "");
+  const src = (g.source || "").replace(/^user_msg#/, "");
+  const hdr = document.getElementById("hdr");
+  put(hdr,
+    h("h1", {}, goal.length > 300 ? goal.slice(0, 300) + "…" : goal),
+    h("div", {class: "meta"},
+      h("span", {}, "session ", h("code", {}, (S.id || "").slice(0, 8))),
+      S.start && h("span", {}, new Date(S.start).toLocaleString()),
+      h("span", {}, fmtDur(S.duration_s || 0)), h("span", {}, `${S.turns || 0} turns`),
+      h("span", {}, `${Object.keys(files).length} files`),
+      S.git_branch && h("span", {}, "branch ", h("code", {}, S.git_branch)),
+      h("span", {}, "base ", h("code", {}, S.start_sha ? S.start_sha.slice(0, 10) : "∅"), h("span", {class: "muted"}, ` (${S.start_sha_basis || ""})`)),
+      src && h("a", {href: "#ev-" + src, onclick: e => { e.preventDefault(); focusEvent(src); }}, "goal source")),
+    g.completion_indicator ? h("div", {class: "indicator"}, h("b", {}, "Done when: "), g.completion_indicator)
+      : h("div", {class: "indicator muted"}, Object.keys(N).length ? "" : "No narrative.json: showing extracted facts only."),
+    pct != null && h("div", {class: "progress"}, h("div", {class: "bar"}, h("i", {style: `width:${Math.max(0, Math.min(100, pct))}%`})),
+      h("b", {}, pct + "%")),
+    pct != null && basis && h("div", {class: "muted small", style: "max-width:720px;margin-top:4px"}, basis),
+    (p.done || p.remaining || tasks.length) && h("div", {class: "lists"},
+      h("div", {}, h("h4", {}, "Done"), h("ul", {}, (p.done || tasks.filter(t => t.status === "completed").map(t => t.subject)).map(x => h("li", {}, x)))),
+      h("div", {}, h("h4", {}, "Remaining"), h("ul", {}, (p.remaining || tasks.filter(t => t.status !== "completed").map(t => t.subject)).map(x => h("li", {}, x))))));
+}
+
+// ── timeline ──
+function timeline() {
+  const rail = document.getElementById("rail");
+  const lessons = {};
+  for (const l of N.lessons || []) (lessons[l.event_ref] ||= []).push(l);
+  const kinds = ["user_msg", "edit", "test_run", "error", "bash"];
+  const label = {user_msg: "prompts", edit: "edits", test_run: "tests", error: "errors", bash: "bash"};
+  const on = new Set(kinds.filter(k => k !== "bash"));
+  const list = h("div", {});
+  const apply = () => list.querySelectorAll(".ev").forEach(el => {
+    el.hidden = !on.has(el.dataset.kind) && !el.dataset.lesson;
+  });
+  const filters = h("div", {class: "filters"}, kinds.map(k => {
+    const n = events.filter(e => e.kind === k).length;
+    const b = h("button", {class: on.has(k) ? "on" : "", onclick: () => {
+      on.has(k) ? on.delete(k) : on.add(k); b.classList.toggle("on"); apply(); }}, `${label[k]} ${n}`);
+    return b;
+  }));
+  let turn = 0;
+  for (const e of events) {
+    if (e.turn !== turn) { turn = e.turn; list.append(h("div", {class: "turn"}, `Turn ${turn}`)); }
+    const fail = e.kind === "test_run" && (e.tests_failed || e.exit_code);
+    const clickable = e.file && files[e.file];
+    const ls = lessons[e.uuid] || [];
+    const el = h("div", {id: "ev-" + e.uuid, class: `ev k-${e.kind}${fail ? " fail" : ""}${clickable ? " clickable" : ""}`,
+      "data-kind": e.kind, "data-lesson": ls.length ? "1" : null,
+      title: e.command || e.output_tail || e.summary,
+      onclick: clickable ? () => focusFile(e.file) : null},
+      h("span", {class: "t"}, fmtTime(e.ts)), h("span", {class: "s"}, e.summary || e.kind),
+      e.subagent && h("span", {class: "muted small"}, " · subagent"),
+      fail && h("span", {class: "small", style: "color:var(--err)"}, " · failed"));
+    put(list, el, ls.map(l => h("div", {class: "lesson"}, l.learned)));
+  }
+  put(rail,h("h2", {}, "Timeline"), filters, events.length ? list : h("div", {class: "empty"}, "No events."));
+  apply();
+}
+
+// ── diffs ──
+function lcsPairs(a, b) {
+  const n = a.length, m = b.length;
+  if (n * m > 4e6) return null;
+  const dp = Array.from({length: n + 1}, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const rows = []; let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) { rows.push([i, j, "eq"]); i++; j++; }
+    else if (j < m && (i >= n || dp[i][j + 1] >= dp[i + 1][j])) { rows.push([null, j, "add"]); j++; }
+    else { rows.push([i, null, "del"]); i++; }
+  }
+  // pair adjacent del/add runs onto the same row
+  const out = [];
+  for (let k = 0; k < rows.length;) {
+    if (rows[k][2] === "eq") { out.push(rows[k++]); continue; }
+    const dels = [], adds = [];
+    while (k < rows.length && rows[k][2] !== "eq") (rows[k][2] === "del" ? dels : adds).push(rows[k++]);
+    for (let x = 0; x < Math.max(dels.length, adds.length); x++)
+      out.push([dels[x] ? dels[x][0] : null, adds[x] ? adds[x][1] : null, "chg"]);
+  }
+  return out;
+}
+function sideBySide(before, after) {
+  const a = (before || "").split("\n"), b = (after || "").split("\n");
+  if (!before) a.length = 0; if (!after) b.length = 0;
+  const rows = lcsPairs(a, b);
+  if (!rows) return null;
+  const L = h("div", {class: "col"}), R = h("div", {class: "col"});
+  for (const [i, j, t] of rows) {
+    L.append(h("div", {class: "ln " + (i == null ? "gap" : t === "eq" ? "" : "del")}, h("span", {}, i == null ? "" : i + 1), h("span", {}, i == null ? "" : a[i])));
+    R.append(h("div", {class: "ln " + (j == null ? "gap" : t === "eq" ? "" : "add")}, h("span", {}, j == null ? "" : j + 1), h("span", {}, j == null ? "" : b[j])));
+  }
+  return h("div", {class: "sbs"}, L, R);
+}
+function udiff(text, truncated) {
+  if (!text) return h("div", {class: "muted small"}, "No textual changes.");
+  return h("pre", {class: "udiff"}, text.split("\n").map(l => h("span", {class:
+    l.startsWith("@@") ? "hunk" : l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : ""}, l || " ")),
+    truncated ? h("span", {class: "hunk"}, "… diff truncated") : null);
+}
+const lazy = (label, make) => {
+  const d = h("details", {class: "diff"}, h("summary", {}, label));
+  d.addEventListener("toggle", () => { if (d.open && d.children.length === 1) d.append(make()); });
+  return d;
+};
+
+// ── files ──
+function symbolCard(path, s, n) {
+  const status = s.status;
+  return h("div", {class: "sym", id: sid(path, s.qualname)},
+    h("div", {class: "symhead"},
+      h("span", {class: "q"}, s.qualname), h("span", {class: "badge " + status}, status),
+      s.renamed_from && h("span", {class: "muted small"}, "from ", h("code", {}, s.renamed_from)),
+      (s.aspects || []).length ? h("span", {class: "aspects"}, s.aspects.join(" · ")) : null,
+      n && n.category && h("span", {class: "chip " + n.category}, n.category),
+      h("span", {class: "muted small"}, s.kind)),
+    n && h("div", {class: "wn"},
+      n.was && h("span", {class: "l"}, "was"), n.was && h("span", {}, n.was),
+      n.now && h("span", {class: "l"}, "now"), n.now && h("span", {}, n.now)),
+    n && n.example && (n.example.before
+      ? h("div", {class: "example"}, h("pre", {class: "b"}, n.example.before), h("span", {class: "arrow"}, "⟶"), h("pre", {class: "af"}, n.example.after))
+      : h("div", {class: "example", style: "grid-template-columns:1fr"}, h("pre", {class: "af"}, n.example.after))),
+    n && n.why && h("div", {class: "why"}, h("span", {class: "l"}, "why "), cited(n.why)),
+    lazy("diff", () => sideBySide(s.before_src, s.after_src) || udiff(s.unified_diff)));
+}
+function dataTables(f, nf) {
+  const out = [];
+  if ((nf.data_changes || []).length) out.push(h("table", {},
+    h("tr", {}, h("th", {}, "Change"), h("th", {}, "Category"), h("th", {}, "Why")),
+    nf.data_changes.map(d => h("tr", {}, h("td", {}, d.what), h("td", {}, h("span", {class: "chip " + d.category}, d.category)), h("td", {}, cited(d.why))))));
+  if ((f.data_changes || []).length) out.push(lazy(`${f.data_changes.length} key-path changes${f.data_changes_truncated ? " (truncated)" : ""}`, () => h("table", {},
+    h("tr", {}, h("th", {}, "Path"), h("th", {}, "Op"), h("th", {}, "Before"), h("th", {}, "After")),
+    f.data_changes.map(c => h("tr", {}, h("td", {}, h("code", {}, c.path)), h("td", {}, h("span", {class: "badge " + (c.op === "changed" ? "modified" : c.op)}, c.op)),
+      h("td", {}, h("code", {}, c.before ?? "")), h("td", {}, h("code", {}, c.after ?? "")))))));
+  if (f.csv) {
+    const c = f.csv;
+    out.push(h("table", {}, h("tr", {}, h("th", {}, ""), h("th", {}, "Before"), h("th", {}, "After")),
+      h("tr", {}, h("td", {}, "rows"), h("td", {}, c.rows_before), h("td", {}, c.rows_after)),
+      h("tr", {}, h("td", {}, "columns"), h("td", {}, c.cols_before), h("td", {}, c.cols_after)),
+      (c.columns_added.length || c.columns_removed.length) && h("tr", {}, h("td", {}, "header"),
+        h("td", {}, c.columns_removed.map(x => "−" + x).join(", ")), h("td", {}, c.columns_added.map(x => "+" + x).join(", ")))),
+      c.changed_rows.length ? h("table", {}, h("tr", {}, h("th", {}, "Op"), h("th", {}, "Before"), h("th", {}, "After")),
+        c.changed_rows.map(r => h("tr", {}, h("td", {}, r.op), h("td", {}, h("code", {}, (r.before || []).join(", "))), h("td", {}, h("code", {}, (r.after || []).join(", ")))))) : null);
+  }
+  if ((f.sections || []).length) out.push(h("table", {},
+    h("tr", {}, h("th", {}, "Section"), h("th", {}, "Change"), h("th", {}, "Lines")),
+    f.sections.map(s => h("tr", {}, h("td", {}, s.section), h("td", {}, h("span", {class: "badge " + (s.op === "modified" ? "modified" : s.op)}, s.op)),
+      h("td", {class: "stat"}, h("span", {class: "a"}, "+" + s.added_lines), " ", h("span", {class: "d"}, "−" + s.removed_lines))))));
+  return out;
+}
+function fileCard(path) {
+  const f = files[path], nf = nFiles[path] || {};
+  if (f.binary) return h("div", {class: "panel"}, h("div", {class: "fbody", style: "padding-top:12px"}, h("span", {class: "path"}, path), " ", h("span", {class: "muted"}, "binary")));
+  const syms = (f.symbols || []).filter(s => s.status !== "unchanged");
+  const described = syms.filter(s => (nf.symbols || {})[s.qualname]);
+  const rest = syms.filter(s => !(nf.symbols || {})[s.qualname]);
+  const unchanged = (f.symbols || []).length - syms.length;
+  const d = h("details", {class: "file panel", id: fid(path)},
+    h("summary", {}, h("span", {class: "path"}, path), h("span", {class: "badge " + f.status}, f.status),
+      h("span", {class: "stat"}, h("span", {class: "a"}, "+" + (f.added_lines || 0)), " ", h("span", {class: "d"}, "−" + (f.removed_lines || 0))),
+      h("span", {class: "muted small"}, [f.language, f.symbol_support ? `${syms.length} symbols changed` : null,
+        f.mutation_count ? `${f.mutation_count} edits` : (f.replayed ? null : "not edited by tools")].filter(Boolean).join(" · "))),
+    h("div", {class: "fbody"},
+      nf.summary && h("p", {class: "summary"}, nf.summary),
+      described.map(s => symbolCard(path, s, nf.symbols[s.qualname])),
+      rest.length ? (described.length ? lazy(`${rest.length} more changed symbols without narrative`, () => h("div", {}, rest.map(s => symbolCard(path, s, null))))
+        : h("div", {}, rest.map(s => symbolCard(path, s, null)))) : null,
+      unchanged ? h("div", {class: "muted small", style: "margin-top:6px"}, `${unchanged} unchanged symbols`) : null,
+      dataTables(f, nf),
+      f.fallback_reason && h("div", {class: "muted small"}, f.fallback_reason),
+      f.unified_diff != null && lazy("file diff", () => udiff(f.unified_diff, f.diff_truncated))));
+  return d;
+}
+function mainPanel() {
+  const main = document.getElementById("main");
+  const disc = F.discrepancies || [];
+  if (disc.length) put(main,h("div", {class: "panel disc"}, h("div", {class: "inner"},
+    h("h2", {}, `Discrepancies (${disc.length})`),
+    h("p", {class: "small muted", style: "margin:4px 0"}, "Places where the transcript and git disagree. Shown as-is rather than guessed."),
+    h("table", {}, h("tr", {}, h("th", {}, "Kind"), h("th", {}, "Path"), h("th", {}, "Detail")),
+      disc.map(x => h("tr", {}, h("td", {}, h("code", {}, x.kind)),
+        h("td", {}, x.path ? h("a", {href: "#" + fid(x.path), onclick: e => { e.preventDefault(); focusFile(x.path); }}, x.path) : "—"),
+        h("td", {}, x.detail, x.event ? [" ", h("a", {class: "cite", href: "#ev-" + x.event, onclick: e => { e.preventDefault(); focusEvent(x.event); }}, "event")] : null)))))));
+  // files with described symbols first, then code, then by size of change
+  const weight = p => [Object.keys((nFiles[p] || {}).symbols || {}).length, files[p].kind === "code" ? 1 : 0,
+    (files[p].added_lines || 0) + (files[p].removed_lines || 0)];
+  const paths = Object.keys(files).sort((a, b) => {
+    const wa = weight(a), wb = weight(b);
+    return (wb[0] - wa[0]) || (wb[1] - wa[1]) || (wb[2] - wa[2]) || a.localeCompare(b);
+  });
+  const expand = h("button", {onclick: () => { const all = [...main.querySelectorAll("details.file")]; const open = !all.every(d => d.open); all.forEach(d => d.open = open); }}, "expand / collapse all");
+  put(main, h("div", {class: "toolbar"}, h("h2", {}, `Files (${paths.length})`), expand),
+    paths.length ? paths.map(fileCard) : h("div", {class: "panel empty"}, "No file changes."));
+  if ((N.files && paths.filter(p => nFiles[p]).length === 1) || paths.length === 1) { const d = main.querySelector("details.file"); if (d) d.open = true; }
+}
+
+header(); timeline(); mainPanel();
+if (location.hash.startsWith("#ev-")) focusEvent(location.hash.slice(4));
+if (location.hash.startsWith("#f-")) { const d = document.getElementById(location.hash.slice(1)); if (d) { d.open = true; d.scrollIntoView(); } }
+})();
+</script>
+</body>
+</html>
