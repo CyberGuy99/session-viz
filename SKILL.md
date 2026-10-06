@@ -5,7 +5,7 @@ description: Turn a Claude Code session transcript into a single-file HTML repor
 
 # session-viz
 
-Pipeline: `extract.py` (deterministic facts) → **you** write `narrative.json` (judgment only) → `build.py` (validates, renders) → optional `publish.sh`.
+Pipeline: `extract.py` (deterministic facts) → **you** write a narrative patch (judgment only; a delta when one exists) → `build.py` (merges, validates, renders) → optional `publish.sh`.
 
 `SV=~/.claude/skills/session-viz` below (a symlink to the source repo). Run everything from the repo the session worked in.
 
@@ -38,9 +38,25 @@ python3 -c "import json;f=json.load(open('$OUT/facts.json'));[print(e['uuid'],e[
 ```
 Then pull individual symbols' `before_src`/`after_src` only for those you describe.
 
-## 3. Write `$OUT/narrative.json`
+**If `$OUT/narrative.json` already exists, don't re-read facts or rewrite the narrative.** Ask for the delta instead:
 
-Schema: `$SV/schema/narrative.schema.json`. Shape:
+```bash
+python3 $SV/scripts/build.py $OUT/facts.json $OUT/narrative.json --delta > $OUT/delta.json
+```
+
+If `up_to_date` is true, skip to §4's build. Otherwise read only delta.json. It lists `new_events` since the narrative was accepted, plus `stale` entries (that code changed since it was described). It also has `unreviewed` changes (new or re-changed symbols and files with no entry, which you may skip if minor), `invalid` validation errors, the current `progress`, and `files`, holding just the facts for those entries. Write a **patch** with only what changes (§3), and apply it as in §4.
+
+## 3. Write `$OUT/narrative.patch.json`
+
+A first narrative is the whole document, written as a patch onto nothing. An update is a JSON merge patch onto the existing narrative: objects merge, `null` deletes a key, and arrays replace. The exception is `"lessons": {"append": [...], "remove": ["<event_ref>", ...]}`, so existing lessons needn't be resent. Example update:
+
+```jsonc
+{"progress": {"percent": 100, "remaining": [], "done": ["…all items, old and new…"]},
+ "files": {"a.py": {"symbols": {"parse": {"now": "…", "example": {…}, "why": "… (ev:…)"}, "old_helper": null}}},
+ "lessons": {"append": [{"ts": "…", "event_ref": "…", "learned": "…"}]}}
+```
+
+Schema of the merged result: `$SV/schema/narrative.schema.json`. Shape:
 
 ```jsonc
 {
@@ -70,7 +86,7 @@ Rules (build.py enforces the starred ones):
 - ★ Every `why` contains at least one `(ev:<uuid>)` citing a real `facts.events` uuid — the user message that asked for it, the failing test that prompted it, the edit itself. Never invent a reason the events don't support; if the only evidence is the edit, cite the edit and say what it does. A file with no events of its own (a `git_only` discrepancy) cites the user message or command most plausibly responsible, and says it was changed outside the tools.
 - ★ `example.before`/`after` look like runnable calls with results: `f(x) → y` (`->` and `=>` also accepted). `before` is `""` only for added symbols. For refactors, before and after results are equal — that's the point. For classes, show construction + a method call; for constants, `NAME → value`.
 - ★ `goal.source` is `user_msg#<uuid>` of a user_msg event (usually `session.goal_candidate`); restate the goal crisply, don't paste it.
-- ★ `lessons[].ts` equals the referenced event's `ts`. Lessons come from `error`/`test_run` events and user corrections: what went wrong → what changed because of it. 0 lessons is fine if nothing went wrong.
+- ★ `lessons[].ts` equals the referenced event's `ts`. Lessons are for the reader: what the session revealed about their code, design or environment (a failing test, a user correction, a bug found by dogfooding, a platform behaviour) → what changed because of it. Not Claude's own tooling slips (a missing CLI like `jq`, a typo in an ad-hoc inspection script, a retried command): those stay in the report's Diagnostics. 0 lessons is fine.
 - One `category` per symbol: `accuracy` = behaviour/correctness changed (incl. new features, and config that changes behaviour), `speed` = performance, `refactoring` = same behaviour, different structure (incl. docs-only and test-only changes).
 - `progress.percent`: prefer task completion (`tasks` done/total) when tasks exist; if `tasks` is empty, judge against the completion indicator and say so in `basis`.
 - Scope: every changed file gets a `summary`. Per-symbol entries go to public / top-level symbols of the files that carry the session's main changes; describing a class covers its methods unless a method changed for its own reason. Tests, fixtures and small helpers may be summary-only. `<module>` may be skipped. build.py warns only about gaps in files where you described some symbols.
@@ -78,10 +94,10 @@ Rules (build.py enforces the starred ones):
 ## 4. Validate and build
 
 ```bash
-python3 $SV/scripts/build.py $OUT/facts.json $OUT/narrative.json --check
+python3 $SV/scripts/build.py $OUT/facts.json $OUT/narrative.json --apply-patch $OUT/narrative.patch.json
 ```
 
-On errors: each line names the JSON path, what's wrong, and valid alternatives. Fix `narrative.json` and re-run until it passes. Do not edit facts.json to make errors go away. Then:
+This merges the patch, validates the result, and only if it passes writes `narrative.json` plus `narrative.meta.json`. The meta file records which events and changes the narrative covers, which is what makes the next `--delta` small. On errors nothing is written: each line names the JSON path, what's wrong, and valid alternatives. Fix the patch and re-run until it passes. Do not edit facts.json, or narrative.json directly, to make errors go away. Then:
 
 ```bash
 python3 $SV/scripts/build.py $OUT/facts.json $OUT/narrative.json -o $OUT/dist/index.html
@@ -111,6 +127,6 @@ When the user wants the whole project ("visualize this project", "all sessions")
 python3 $SV/scripts/project.py            # or --project <repo path | ~/.claude/projects/<dir>>
 ```
 
-It extracts and builds every session (cached; only changed transcripts are redone) into `${SESSION_VIZ_OUT:-~/.cache/session-viz}/project-<encoded-cwd>/dist/`: `index.html` lists sessions, `s/<session-id>/index.html` is each report. A session's page includes its narrative only if `$OUT/<session-id>/narrative.json` (§3's path) exists and passes validation; otherwise the page is facts-only and project.py prints the session with its `/session-viz --session <path>` command.
+It extracts and builds every session (cached; only changed transcripts are redone) into `${SESSION_VIZ_OUT:-~/.cache/session-viz}/project-<encoded-cwd>/dist/`: `index.html` lists sessions, `s/<session-id>/index.html` is each report. A session's page includes its narrative from `$OUT/<session-id>/narrative.json` (§4 writes it). Entries that no longer match the facts are dropped and the rest still renders ("partial"). The page is facts-only only if the goal or progress itself is invalid. project.py prints each session whose narrative is missing, partial, or behind (newer events, or code changed since it was written), with its `/session-viz --session <path>` command. With an existing narrative, that run is the cheap delta path.
 
 Relay that list to the user and offer to write narratives for the sessions they pick. For each, follow §1–§4 with `--session <that transcript path>` (§2 can reuse `$OUT/<sid>/facts.json`, which project.py already wrote), then re-run project.py. Publishing is §5 with the project dir: `$SV/scripts/publish.sh <project out>/dist project-<name>`. Ask first, as in §5.

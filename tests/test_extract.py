@@ -175,6 +175,46 @@ def test_historical_session_uses_end_commit(tmp_path):
         {("replay_mismatch", "calc.py"), ("git_only", "conf.json")}
 
 
+def test_untracked_input_read_but_never_edited_predates_session(tmp_path):
+    repo = setup_repo(tmp_path)
+    (repo / "PLAN.md").write_text("# Plan\n")  # untracked before the session
+    t = T(repo)
+    t.prompt("Read PLAN.md and go")
+    t.tool("Read", {"file_path": str(repo / "PLAN.md")}, "     1\t# Plan\n",
+           tur={"file": {"content": "# Plan\n", "startLine": 1, "numLines": 1, "totalLines": 1}})
+    t.tool("Bash", {"command": "echo hi > made.txt"})
+    t.tool("Read", {"file_path": str(repo / "made.txt")}, "     1\thi\n",
+           tur={"file": {"content": "hi\n", "startLine": 1, "numLines": 1, "totalLines": 1}})
+    (repo / "SPEC.md").write_text("spec\n")  # untracked input shown via Bash
+    t.tool("Bash", {"command": "cat SPEC.md && ls"}, "spec\nPLAN.md\nSPEC.md")
+    t.tool("Bash", {"command": "printf 'x\\n' > out.txt && cat out.txt"}, "x")  # written by Bash: not pre-existing
+    (repo / "out.txt").write_text("x\n")
+    (repo / "made.txt").write_text("hi\n")
+    facts, _ = extract.extract(t.write(tmp_path / "S.jsonl"), str(repo), None)
+    assert facts["session"]["pre_existing_files"] == ["PLAN.md", "SPEC.md"] and "PLAN.md" not in facts["files"]
+    # created by Bash before its first Read: a real change of this session
+    assert {(x["kind"], x["path"]) for x in facts["discrepancies"]} == {("git_only", "made.txt"),
+                                                                        ("git_only", "out.txt")}
+
+
+def test_empty_new_string_deletes_line():
+    assert extract.apply_mutation("Edit", {"old_string": "b = 2", "new_string": ""}, "a = 1\nb = 2\nc = 3\n") == \
+        "a = 1\nc = 3\n"
+    assert extract.apply_mutation("Edit", {"old_string": "b = 2\n", "new_string": ""}, "a = 1\nb = 2\nc = 3\n") == \
+        "a = 1\nc = 3\n"
+
+
+def test_chained_command_failure_is_not_a_test_failure(tmp_path):
+    repo = setup_repo(tmp_path)
+    t = T(repo)
+    t.prompt("go")
+    t.tool("Bash", {"command": "pytest -q | tail -1 && python3 -c 'boom'"}, "34 passed in 1s\nNameError\nExit code 1",
+           is_error=True)
+    t.tool("Bash", {"command": "pytest -q"}, "ImportError while collecting\nExit code 2", is_error=True)
+    facts, _ = extract.extract(t.write(tmp_path / "S.jsonl"), str(repo), None)
+    assert [e["tests_failed"] for e in facts["events"] if e["kind"] == "test_run"] == [False, True]
+
+
 def git_out(repo, *a):
     return subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True).stdout.strip()
 

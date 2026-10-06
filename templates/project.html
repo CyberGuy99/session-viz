@@ -45,6 +45,7 @@ main { padding: 20px 32px 80px; max-width: 1100px; }
 .chip.bad { color: var(--err); border-color: var(--err); }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
 .chip.ok { color: var(--acc); border-color: var(--acc); }
+.chip.diag { border-style: dashed; opacity: .75; cursor: help; }
 .add { color: var(--add-ink); } .del { color: var(--del-ink); }
 .progress { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); max-width: 420px; }
 .bar { flex: 1; height: 6px; background: var(--soft); border-radius: 99px; overflow: hidden; }
@@ -105,9 +106,9 @@ document.getElementById("hdr").append(
 // filters
 const FILTERS = [
   ["all", "All", () => true],
-  ["narr", "Narrative", s => s.narrative === "ok"],
-  ["nonarr", "No narrative", s => s.narrative !== "ok"],
-  ["fail", "Failures", s => s.tests_failed > 0 || s.errors > 0],
+  ["narr", "Narrative", s => s.narrative === "ok" || s.narrative === "partial"],
+  ["nonarr", "Needs narrative", s => s.regen && s.regen.length > 0],
+  ["fail", "Tests failing", s => s.tests_last_failed],
 ];
 let filter = "all";
 const fbox = document.getElementById("filters"), q = document.getElementById("q");
@@ -121,18 +122,25 @@ function card(s) {
     h("span", { class: "chip" }, dur(s.duration_s)),
     s.files_changed > 0 && h("span", { class: "chip" }, `${s.files_changed} file${s.files_changed === 1 ? "" : "s"} `,
       h("span", { class: "add" }, `+${s.added_lines}`), " ", h("span", { class: "del" }, `−${s.removed_lines}`)),
-    s.test_runs > 0 && h("span", { class: "chip " + (s.tests_failed ? "warn" : "ok") },
-      `${s.test_runs} test run${s.test_runs === 1 ? "" : "s"}` + (s.tests_failed ? `, ${s.tests_failed} failing` : "")),
-    s.errors > 0 && h("span", { class: "chip bad" }, `${s.errors} error${s.errors === 1 ? "" : "s"}`),
+    s.test_runs > 0 && h("span", { class: "chip " + (s.tests_last_failed ? "warn" : "ok"),
+      title: `${s.test_runs} test run${s.test_runs === 1 ? "" : "s"}, ${s.tests_failed} failed along the way` },
+      s.tests_last_failed ? "tests failing" : "tests passing"),
     s.tasks_total > 0 && h("span", { class: "chip" }, `tasks ${s.tasks_done}/${s.tasks_total}`),
     s.subagents > 0 && h("span", { class: "chip" }, `${s.subagents} subagent${s.subagents === 1 ? "" : "s"}`),
     s.branch && h("span", { class: "chip mono" }, s.branch),
     s.cost_usd != null && h("span", { class: "chip" }, usd(s.cost_usd)),
     s.compacted && h("span", { class: "chip warn", title: "Transcript was /compact-ed; early edits need --since" }, "compacted"),
-    s.discrepancies > 0 && h("span", { class: "chip warn", title: "See the discrepancies panel in the report" }, `${s.discrepancies} discrepanc${s.discrepancies === 1 ? "y" : "ies"}`),
+    (s.errors + s.discrepancies) > 0 && h("span", { class: "chip diag", title:
+      `${s.errors} failed tool call${s.errors === 1 ? "" : "s"}` +
+      (s.errors ? ` (${s.errors_with_lessons || 0} explained by lessons)` : "") +
+      `, ${s.discrepancies} transcript/git discrepanc${s.discrepancies === 1 ? "y" : "ies"}. ` +
+      "Extraction notes, mostly for Claude: see Diagnostics at the bottom of the report." },
+      `${s.errors + s.discrepancies} diagnostic${s.errors + s.discrepancies === 1 ? "" : "s"}`),
     s.narrative === "ok" ? h("span", { class: "chip ok" }, "narrative")
+      : s.narrative === "partial" ? h("span", { class: "chip warn", title: (s.narrative_errors || []).join("\n") }, "narrative (partial)")
       : h("span", { class: "chip warn" }, s.narrative === "stale" ? "narrative out of date" : "facts only"),
   ];
+  const b = s.narrative_behind || {};
   const showPrompt = s.first_prompt && s.first_prompt !== s.title;
   return h("div", { class: "card", id: "s-" + s.id },
     h("h3", null, h("a", { href: s.href }, s.title || s.id)),
@@ -142,8 +150,10 @@ function card(s) {
     s.progress != null && h("div", { class: "progress" },
       h("div", { class: "bar" }, h("i", { style: `width:${Math.max(0, Math.min(100, s.progress))}%` })), `${s.progress}% to goal`),
     s.regen && s.regen.length > 0 && h("details", { class: "regen" },
-      h("summary", null, s.narrative === "stale" ? "Narrative no longer matches the facts: how to regenerate"
-                                                 : "No narrative yet: how to generate one"),
+      h("summary", null,
+        s.narrative === "missing" ? "No narrative yet: how to generate one"
+        : s.narrative === "stale" ? "Narrative no longer matches the facts: how to regenerate"
+        : `Narrative is behind the session (${b.events || 0} newer events, ${b.entries || 0} changed entries): how to update`),
       (s.narrative_errors || []).length > 0 && h("pre", null, s.narrative_errors.join("\n")),
       h("div", null, "In Claude Code, from the session's repo:"), h("pre", null, s.regen[0]),
       h("div", null, "Then rebuild this site:"), h("pre", null, s.regen[1])));

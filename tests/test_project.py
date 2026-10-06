@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import build  # noqa: E402
 import project  # noqa: E402
 from test_extract import T, setup_repo  # noqa: E402
 
@@ -63,15 +64,44 @@ def test_index_pages_and_narrative_states(tmp_path, capsys):
         assert s["narrative"] == "missing" and s["regen"][0] == f"/session-viz --session {proj / (s['id'] + '.jsonl')}"
     assert "/session-viz --session" in capsys.readouterr().err
 
-    (tmp_path / "cache" / "aaa" / "narrative.json").write_text(json.dumps(narrative_for(tmp_path, "aaa")))
-    (tmp_path / "cache" / "bbb" / "narrative.json").write_text(json.dumps({**narrative_for(tmp_path, "bbb"),
-                                                                           "files": {"nope.py": {"summary": "x"}}}))
+    # aaa: accepted through --apply-patch, so its coverage is recorded and it is up to date
+    patch = tmp_path / "patch.json"
+    patch.write_text(json.dumps({**narrative_for(tmp_path, "aaa"), "files": {"calc.py": {"summary": "X"}}}))
+    cache = tmp_path / "cache"
+    assert build.main([str(cache / "aaa" / "facts.json"), str(cache / "aaa" / "narrative.json"),
+                       "--apply-patch", str(patch)]) == 0
+    # bbb: hand-written, with one entry that doesn't match the facts and no coverage record
+    (cache / "bbb" / "narrative.json").write_text(json.dumps({**narrative_for(tmp_path, "bbb"),
+                                                              "files": {"nope.py": {"summary": "x"}}}))
     run(proj, tmp_path)
     by = {s["id"]: s for s in index_data(tmp_path)["sessions"]}
     assert by["aaa"]["narrative"] == "ok" and by["aaa"]["progress"] == 40 and by["aaa"]["regen"] == []
     assert "goal of aaa" in (tmp_path / "site" / "dist" / "s" / "aaa" / "index.html").read_text()
-    assert by["bbb"]["narrative"] == "stale" and "nope.py" in by["bbb"]["narrative_errors"][0]
+    assert by["bbb"]["narrative"] == "partial" and "nope.py" in by["bbb"]["narrative_errors"][0]
+    assert "goal of bbb" in (tmp_path / "site" / "dist" / "s" / "bbb" / "index.html").read_text()
+    assert by["bbb"]["narrative_behind"] == {"events": 1, "entries": 1}  # the Write and calc.py aren't covered
+
+    bad = {**narrative_for(tmp_path, "bbb"), "goal": {**narrative_for(tmp_path, "bbb")["goal"], "source": "user_msg#x"}}
+    (cache / "bbb" / "narrative.json").write_text(json.dumps(bad))
+    run(proj, tmp_path)
+    by = {s["id"]: s for s in index_data(tmp_path)["sessions"]}
+    assert by["bbb"]["narrative"] == "stale"
     assert "goal of bbb" not in (tmp_path / "site" / "dist" / "s" / "bbb" / "index.html").read_text()
+
+
+def test_delta_reconstructs_coverage_for_narratives_without_meta(tmp_path):
+    _, proj = make_project(tmp_path)
+    run(proj, tmp_path)
+    facts = json.loads((tmp_path / "cache" / "aaa" / "facts.json").read_text())
+    write_ev = next(e for e in facts["events"] if e["kind"] == "edit")
+    # cites only the prompt: the Write after it, and calc.py, aren't covered
+    narr = narrative_for(tmp_path, "aaa")
+    d = build.delta(narr, facts, build.reconstruct_meta(narr, facts))
+    assert d["baseline"].startswith("reconstructed") and [e["uuid"] for e in d["new_events"]] == [write_ev["uuid"]]
+    assert d["unreviewed"] == ["calc.py", "calc.py::X"]
+    # cites the Write: everything up to it is covered, and calc.py is exactly as written against
+    narr["files"] = {"calc.py": {"summary": f"adds X (ev:{write_ev['uuid']})"}}
+    assert build.delta(narr, facts, build.reconstruct_meta(narr, facts))["up_to_date"]
 
 
 def test_cache_hits_and_selective_rebuild(tmp_path, capsys):

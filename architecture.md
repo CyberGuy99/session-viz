@@ -30,6 +30,8 @@ transcript.jsonl (+ subagent .jsonl) + git repo
 
 **project.py** (project mode) runs extract.py + build.py over every main transcript in `~/.claude/projects/<encoded-cwd>/` and writes a static site: `dist/index.html` (session list from `templates/project.html`) plus `dist/s/<session-id>/index.html` per session, each with a back-link. Facts, summaries and a cache key live in the per-session dir the skill already uses (`~/.cache/session-viz/<session-id>/`), so a narrative the skill writes there shows up on the next run. Claude is not invoked; sessions without a valid narrative render facts-only and are listed with the command that generates one.
 
+**Incremental narratives.** Every changed file and symbol in facts carries a `fingerprint`. `build.py --apply-patch` merges a narrative patch, validates it, and records what the result covers in `narrative.meta.json`. `build.py --delta` compares that with fresh facts, so Claude updates a narrative from a small delta (new events, changed entries) instead of re-reading all facts.
+
 ## Key data flows
 
 1. **Edit replay.** For each file touched in the transcript: seed `before` from `git show <start_sha>:<path>` → else from the first `Read` tool_result of that file → else empty (new file). Apply each mutation in transcript order to a running copy. The final copy is `after`. If an `Edit`'s `old_string` is not found in the running copy, the replay for that file is marked broken, and the working-tree content is used for `after` with a discrepancy logged.

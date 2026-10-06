@@ -12,6 +12,7 @@ import argparse
 import ast
 import csv
 import difflib
+import hashlib
 import io
 import json
 import os
@@ -26,6 +27,7 @@ MUTATION_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 TRACKED_TOOLS = MUTATION_TOOLS | {"Bash", "TaskCreate", "TaskUpdate", "TodoWrite", "Read"}
 TEST_RE = re.compile(r"\b(pytest|npm (run )?test|cargo test|go test|python3? -m (pytest|unittest))\b(?! --version)")
 TEST_FAIL_RE = re.compile(r"\b\d+ failed\b|\b\d+ errors? in [\d.]+s|^FAILED |^FAIL\b|test result: FAILED", re.M)
+TEST_PASS_RE = re.compile(r"\b\d+ passed\b|^OK\b|test result: ok", re.M)
 EXIT_RE = re.compile(r"Exit code:? (\d+)")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.M)
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -58,6 +60,12 @@ def unified(before: str | None, after: str | None, name: str = "") -> tuple[str,
                                       f"a/{name}", f"b/{name}", lineterm="", n=3))
     truncated = len(lines) > MAX_DIFF_LINES
     return "\n".join(lines[:MAX_DIFF_LINES]), truncated
+
+
+def fingerprint(before: str | None, after: str | None) -> str:
+    """Identity of a change: narrative entries written against it stay valid while it is unchanged."""
+    blob = json.dumps([before, after], ensure_ascii=False)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 def line_stats(before: str | None, after: str | None) -> dict:
@@ -241,6 +249,7 @@ def diff_symbols(before: str | None, after: str | None) -> list[dict] | None:
             bs, as_ = (sb or {}).get("source", ""), (sa or {}).get("source", "")
             c["before_src"], c["after_src"] = bs, as_
             c["unified_diff"] = unified(bs, as_, qual)[0]
+            c["fingerprint"] = fingerprint(bs, as_)
             c["signature_before"] = (sb or {}).get("signature", "")
             c["signature_after"] = (sa or {}).get("signature", "")
         if aspects is not None:
@@ -430,6 +439,7 @@ def diff_ts_symbols(lang: str, before: str | None, after: str | None) -> list[di
         if status != "unchanged":
             bs, as_ = (sb or {}).get("source", ""), (sa or {}).get("source", "")
             c.update(before_src=bs, after_src=as_, unified_diff=unified(bs, as_, q)[0],
+                     fingerprint=fingerprint(bs, as_),
                      signature_before=(sb or {}).get("signature", ""),
                      signature_after=(sa or {}).get("signature", ""))
             if status == "modified":
@@ -441,7 +451,7 @@ def diff_ts_symbols(lang: str, before: str | None, after: str | None) -> list[di
 def analyze_file(path: str, before: str | None, after: str | None) -> dict:
     """Per-file diff payload. Chooses symbol / structured / csv / section / line diff by extension."""
     ext = Path(path).suffix.lower()
-    res: dict = {"symbol_support": False}
+    res: dict = {"symbol_support": False, "fingerprint": fingerprint(before, after)}
     diff, trunc = unified(before, after, path)
     res.update(line_stats(before, after))
 
@@ -550,14 +560,16 @@ def is_human_prompt(r: dict) -> bool:
 class Transcript:
     """Parsed main + subagent records with tool_use ⨝ tool_result pairing."""
 
-    def __init__(self, main: Path, include_subagents: bool = True):
+    def __init__(self, main: Path, include_subagents: bool = True, upto: str | None = None):
+        """upto: keep only records at or before this timestamp (the session as it was then)."""
         self.main = main
         self.records = load_jsonl(main)
         self.subagent_files = find_subagents(main, self.records) if include_subagents else []
         all_recs = list(self.records)
         for p in self.subagent_files:
             all_recs += load_jsonl(p)
-        self.all = [r for r in all_recs if r.get("type") in ("user", "assistant") and r.get("timestamp")]
+        self.all = [r for r in all_recs if r.get("type") in ("user", "assistant") and r.get("timestamp")
+                    and (upto is None or r["timestamp"] <= upto)]
         self.all.sort(key=lambda r: (r["timestamp"], r.get("uuid", "")))
         self.results = {}
         for r in self.all:
@@ -627,6 +639,8 @@ def apply_mutation(name: str, inp: dict, cur: str | None) -> str | None:
                 continue
             if old not in text:
                 raise ValueError("old_string not found in running copy")
+            if new == "" and not old.endswith("\n") and old + "\n" in text:
+                old += "\n"  # Claude Code's Edit deletes the whole line when new_string is empty
             text = text.replace(old, new) if e.get("replace_all") else text.replace(old, new, 1)
         return text
     if name == "NotebookEdit":
@@ -789,6 +803,30 @@ def final_content(repo: str, rel: str, end_sha: str | None) -> str | None:
     return r.stdout.decode("utf-8") if r.returncode == 0 else None  # bytes: keep \r\n as on disk
 
 
+BASH_WRITES_RE = re.compile(r">|\btee\b|\bsed\s+-i|\b(mv|cp|touch|rm|ln|install|patch|truncate|dd)\b"
+                            r"|\bgit\s+(checkout|restore|apply|stash|reset|mv|pull|merge)\b")
+
+
+def predates_session(rp: FileReplay, final: str | None, bash_calls: list[dict]) -> bool:
+    """True if the file's content was already there before the session (e.g. an untracked input file in a
+    repo without a base commit): never mutated by a tool, and the first Read or Bash command touching it
+    already shows the full final content without being able to write it (`cat PLAN.md`)."""
+    if rp.calls or not final:
+        return False
+    name = os.path.basename(rp.rel)
+    touches = sorted([("read", r) for r in rp.reads] +
+                     [("bash", c) for c in bash_calls if name in c["use"].get("input", {}).get("command", "")],
+                     key=lambda x: x[1]["record"]["timestamp"])
+    if not touches:
+        return False
+    kind, first = touches[0]
+    if kind == "read":
+        return read_seed(first) == final
+    res = first["result"]
+    return bool(res) and not res["is_error"] and not BASH_WRITES_RE.search(first["use"]["input"]["command"]) \
+        and final.strip() in res["text"]
+
+
 def is_ignored(repo: str, rel: str) -> bool:
     r = subprocess.run(["git", "-C", repo, "check-ignore", "-q", rel], capture_output=True)
     return r.returncode == 0
@@ -850,8 +888,9 @@ def build_tasks(t: Transcript) -> list[dict]:
     return [tasks[k] for k in order]
 
 
-def extract(session: Path, repo: str | None, since: str | None, until: str | None = None) -> tuple[dict, dict]:
-    t = Transcript(session)
+def extract(session: Path, repo: str | None, since: str | None, until: str | None = None,
+            upto: str | None = None) -> tuple[dict, dict]:
+    t = Transcript(session, upto=upto)
     repo = repo or t.cwd or os.getcwd()
     top = (git(repo, "rev-parse", "--show-toplevel") or "").strip()
     repo_root = os.path.realpath(top or repo)
@@ -925,8 +964,11 @@ def extract(session: Path, repo: str | None, since: str | None, until: str | Non
             if TEST_RE.search(cmd):
                 ev["kind"] = "test_run"
                 ev["output_tail"] = "\n".join((res or {}).get("text", "").splitlines()[-15:])
-                # pipes (`| tail`) hide the exit code, so also read the runner's summary line
-                ev["tests_failed"] = bool(ev["exit_code"]) or bool(TEST_FAIL_RE.search((res or {}).get("text", "")))
+                # pipes (`| tail`) hide the exit code, and chained commands (`pytest && x`) can fail on their
+                # own, so the runner's summary line wins over the exit code when there is one
+                text = (res or {}).get("text", "")
+                ev["tests_failed"] = bool(TEST_FAIL_RE.search(text)) or \
+                    (bool(ev["exit_code"]) and not TEST_PASS_RE.search(text))
             elif res and res["is_error"]:
                 ev["kind"] = "error"
                 ev["output_tail"] = "\n".join(res["text"].splitlines()[-15:])
@@ -939,6 +981,8 @@ def extract(session: Path, repo: str | None, since: str | None, until: str | Non
 
     # files
     git_files = git_changes(repo_root, start_sha, end_sha) if top else {}
+    bash_calls = [c for c in t.tool_calls if c["use"]["name"] == "Bash"]
+    preexisting: set[str] = set()
     files: dict[str, dict] = {}
     verify: list[dict] = []
     edit_events: dict[str, list[str]] = {}
@@ -969,6 +1013,9 @@ def extract(session: Path, repo: str | None, since: str | None, until: str | Non
                                       "detail": f"replayed content differs from {where} "
                                                 "(edited outside Write/Edit tools, or after the session)"})
         else:
+            if predates_session(rp or replay_for(rel), disk, bash_calls):
+                preexisting.add(rel)
+                continue
             before = git(repo_root, "show", f"{start_sha}:{rel}") if start_sha else None
             after, seed_source, applied, replayed = disk, "git" if before is not None else "new", [], False
         if rel not in git_files:
@@ -997,6 +1044,7 @@ def extract(session: Path, repo: str | None, since: str | None, until: str | Non
         "user_messages": prompts, "start_sha": start_sha, "start_sha_basis": sha_basis,
         "end_ref": end_sha or "worktree", "end_ref_basis": end_basis,
         "compacted": t.compacted, "outside_repo_files": sorted(outside), "ignored_files": sorted(ignored),
+        "pre_existing_files": sorted(preexisting),
         "git_branch": next((r.get("gitBranch") for r in t.records if r.get("gitBranch")), None),
     }
     facts = {"schema_version": 1, "session": session, "files": files, "tasks": build_tasks(t),

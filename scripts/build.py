@@ -205,6 +205,150 @@ def validate(narr: dict, facts: dict) -> tuple[list[str], list[str]]:
     return fmt("ERROR", serrs) + fmt("ERROR", rerrs), w
 
 
+# ───────────────────────── incremental narratives ─────────────────────────
+#
+# narrative.meta.json (beside narrative.json) records what an accepted narrative covered: the last event
+# and the fingerprint of every change at that time. --delta compares it with fresh facts, so updating a
+# narrative means reading only what is new or changed, and writing a merge patch instead of a rewrite.
+
+def meta_path(narrative_path) -> Path:
+    return Path(narrative_path).with_suffix(".meta.json")
+
+
+def _changes(facts: dict) -> dict[str, str]:
+    """Entry key → fingerprint for every changed file ("path") and changed symbol ("path::qualname")."""
+    out = {}
+    for path, f in facts.get("files", {}).items():
+        if f.get("status") in ("unchanged", None) or not f.get("fingerprint"):
+            continue
+        out[path] = f["fingerprint"]
+        for s in f.get("symbols", []):
+            if s["status"] != "unchanged" and s.get("fingerprint"):
+                out[f"{path}::{s['qualname']}"] = s["fingerprint"]
+    return out
+
+
+def _described(narr: dict) -> set[str]:
+    keys = set()
+    for path, f in (narr.get("files") or {}).items():
+        keys.add(path)
+        keys.update(f"{path}::{q}" for q in f.get("symbols") or {})
+    return keys
+
+
+def make_meta(narr: dict, facts: dict) -> dict:
+    seen = _changes(facts)
+    return {"covered_until": max((e["ts"] for e in facts.get("events", [])), default=None),
+            "entries": {k: v for k, v in seen.items() if k in _described(narr)}, "seen": seen}
+
+
+def _cited_until(narr: dict, facts: dict) -> str | None:
+    """Fallback baseline for narratives without meta: the newest event they cite."""
+    ts = {e["uuid"]: e["ts"] for e in facts.get("events", [])}
+    text = json.dumps(narr)
+    refs = set(CITE_RE.findall(text)) | {l.get("event_ref") for l in narr.get("lessons") or []}
+    src = (narr.get("goal") or {}).get("source", "")
+    refs.add(src[9:] if src.startswith("user_msg#") else None)
+    return max((ts[u] for u in refs if u in ts), default=None)
+
+
+def reconstruct_meta(narr: dict, facts: dict) -> dict | None:
+    """Meta for a narrative written before meta existed: re-extract the session cut at the newest event the
+    narrative cites. Edited files' content comes from transcript replay, so their fingerprints are exactly
+    what the narrative was written against. None if the transcript is gone or nothing is cited."""
+    s = facts.get("session") or {}
+    until = _cited_until(narr, facts)
+    if not until or not s.get("transcript") or not Path(s["transcript"]).exists():
+        return None
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import extract  # parsing stays in extract.py
+    then, _ = extract.extract(Path(s["transcript"]), s.get("repo_root"), s.get("start_sha"), upto=until)
+    return {**make_meta(narr, then), "reconstructed": True}
+
+
+def delta(narr: dict, facts: dict, meta: dict | None) -> dict:
+    """What an existing narrative is missing relative to fresh facts. `up_to_date` when nothing is."""
+    if meta:
+        until = meta.get("covered_until")
+        basis = "reconstructed from the transcript at the newest cited event" if meta.get("reconstructed") else "meta"
+    else:
+        until, basis = _cited_until(narr, facts), "newest cited event (no meta: changed code can't be detected)"
+    new_events = [e for e in facts.get("events", []) if until is None or e["ts"] > until]
+    now, described = _changes(facts), _described(narr)
+    old = (meta or {}).get("entries", {})
+    stale = sorted(k for k, fp in old.items() if k in now and now[k] != fp)
+    seen = (meta or {}).get("seen")
+    if seen is None:  # no meta and no transcript to rebuild it from: only missing files are knowable
+        unreviewed = sorted(k for k in now if "::" not in k and k not in described)
+    else:
+        unreviewed = sorted(k for k, fp in now.items() if k not in described and seen.get(k) != fp
+                            and not k.endswith("::<module>"))
+    errs, _ = validate(narr, facts) if narr else ([], [])
+    paths = {k.split("::")[0] for k in stale + unreviewed} | {e["file"] for e in new_events if e.get("file")}
+    ctx = {}
+    for p in sorted(paths & set(facts.get("files", {}))):
+        f = facts["files"][p]
+        want = {k.split("::", 1)[1] for k in stale + unreviewed if k.startswith(p + "::")}
+        ctx[p] = {k: v for k, v in f.items() if k not in ("symbols", "events")}
+        if f.get("symbols"):
+            ctx[p]["symbols"] = [s for s in f["symbols"] if s["qualname"] in want]
+            ctx[p].pop("unified_diff", None)
+    return {"up_to_date": not (new_events or stale or unreviewed or errs),
+            "baseline": basis, "covered_until": until, "new_events": new_events,
+            "stale": stale, "unreviewed": unreviewed, "invalid": errs,
+            "progress": narr.get("progress"), "files": ctx}
+
+
+def merge_patch(target, patch, top: bool = True):
+    """RFC 7386 merge patch (null deletes, arrays replace), plus top-level
+    "lessons": {"append": [...], "remove": [event_ref, ...]} so lessons needn't be resent."""
+    if not isinstance(patch, dict):
+        return patch
+    out = dict(target) if isinstance(target, dict) else {}
+    for k, v in patch.items():
+        if v is None:
+            out.pop(k, None)
+        elif top and k == "lessons" and isinstance(v, dict):
+            drop = set(v.get("remove", []))
+            kept = [l for l in out.get("lessons", []) if l.get("event_ref") not in drop]
+            out["lessons"] = sorted(kept + v.get("append", []), key=lambda l: l.get("ts", ""))
+        else:
+            out[k] = merge_patch(out.get(k), v, False)
+    return out
+
+
+def prune_invalid(narr: dict, facts: dict) -> tuple[dict, list[str]]:
+    """Drop the entries that fail referential checks (a file, symbol, data change or lesson), so the rest
+    of a partly outdated narrative still renders. ([], dropped) is never returned for goal/progress errors:
+    those can't be dropped, and the caller gets the errors back via validate()."""
+    narr, dropped = json.loads(json.dumps(narr)), []
+    for _ in range(50):
+        serrs, _ = schema_errors(narr)
+        errs = serrs or ref_errors(narr, facts)[0]
+        if not errs:
+            return narr, dropped
+        cut = set()
+        for p, _m in errs:
+            if p[:1] == ["files"] and len(p) >= 2:  # a symbol / data change, else the file's symbols, else the file
+                cut.add(tuple(p[:4]) if len(p) >= 4 and p[2] in ("symbols", "data_changes") else tuple(p[:3]))
+            elif p[:1] == ["lessons"] and len(p) >= 2:
+                cut.add(tuple(p[:2]))
+            else:
+                return narr, dropped  # goal/progress: not prunable
+        # deepest first, and higher list indexes before lower ones
+        for c in sorted(cut, key=lambda c: (len(c), [f"{x:06d}" if isinstance(x, int) else x for x in c]),
+                        reverse=True):
+            node = narr
+            try:
+                for k in c[:-1]:
+                    node = node[k]
+                del node[c[-1]]
+            except (KeyError, IndexError, TypeError):
+                continue  # already gone with its parent
+            dropped.append("/".join(map(str, c)))
+    return narr, dropped
+
+
 # ───────────────────────── render ─────────────────────────
 
 def embed(id_: str, obj) -> str:
@@ -238,12 +382,39 @@ def main(argv=None) -> int:
     ap.add_argument("-o", "--out", default="dist/index.html")
     ap.add_argument("--check", action="store_true", help="validate only; write nothing")
     ap.add_argument("--back", help="href for a '← all sessions' link (project mode)")
+    ap.add_argument("--delta", action="store_true",
+                    help="print (JSON) what the narrative is missing vs these facts; write nothing")
+    ap.add_argument("--apply-patch", metavar="PATCH",
+                    help="merge PATCH into the narrative, validate, then write narrative + .meta.json "
+                         "(nothing written on errors or with --check); renders nothing")
     a = ap.parse_args(argv)
 
     facts = json.loads(Path(a.facts).read_text(encoding="utf-8"))
     narr = {}
     if a.narrative and Path(a.narrative).exists():
         narr = json.loads(Path(a.narrative).read_text(encoding="utf-8") or "{}")
+    if a.delta:
+        mp = meta_path(a.narrative) if a.narrative else None
+        meta = json.loads(mp.read_text()) if mp and mp.exists() else (reconstruct_meta(narr, facts) if narr else None)
+        print(json.dumps(delta(narr, facts, meta), indent=1, ensure_ascii=False, sort_keys=True))
+        return 0
+    if a.apply_patch:
+        if not a.narrative:
+            ap.error("--apply-patch needs the narrative path to write")
+        merged = merge_patch(narr, json.loads(Path(a.apply_patch).read_text(encoding="utf-8")))
+        errs, warns = validate(merged, facts)
+        for line in warns + errs:
+            print(line, file=sys.stderr)
+        if errs:
+            print(f"\n{a.apply_patch}: {len(errs)} error(s) after merging; fix the patch and re-run. "
+                  "Nothing written.", file=sys.stderr)
+            return 2
+        if not a.check:
+            Path(a.narrative).write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            meta_path(a.narrative).write_text(json.dumps(make_meta(merged, facts), indent=1, sort_keys=True) + "\n")
+        print(f"{a.narrative}: patched and valid ({len(warns)} warning(s))"
+              + (" [--check: not written]" if a.check else ""), file=sys.stderr)
+        return 0
     if narr:
         errs, warns = validate(narr, facts)
         for line in warns + errs:

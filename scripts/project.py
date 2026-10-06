@@ -70,6 +70,7 @@ def cache_key(main: Path, cwd: str | None, narrative: Path, prev: dict) -> dict:
         "transcripts": [_stat(p) for p in [main, *side]],
         "code": [_sha(p.read_bytes()) for p in CODE],
         "narrative": _stat(narrative) if narrative.exists() else None,
+        "narrative_meta": _stat(build.meta_path(narrative)) if build.meta_path(narrative).exists() else None,
         "head": (extract.git(repo, "rev-parse", "HEAD") or "").strip() if repo else None,
     }
     if repo and prev.get("end_ref") == "worktree":
@@ -79,18 +80,36 @@ def cache_key(main: Path, cwd: str | None, narrative: Path, prev: dict) -> dict:
 
 # ───────────────────────── per session ─────────────────────────
 
-def narrative_state(path: Path, facts: dict) -> tuple[dict, str, list[str]]:
-    """(narrative to render, ok|stale|missing, first errors)."""
+NOTABLE = ("user_msg", "edit", "test_run")
+
+
+def narrative_state(path: Path, facts: dict) -> tuple[dict, str, list[str], dict]:
+    """(narrative to render, ok|partial|stale|missing, first errors, how far it is behind the facts).
+
+    partial: some entries no longer match the facts and are dropped; the rest renders."""
+    behind = {"events": 0, "entries": 0}
     if not path.exists():
-        return {}, "missing", []
+        return {}, "missing", [], behind
     try:
         narr = json.loads(path.read_text(encoding="utf-8") or "{}")
     except json.JSONDecodeError as e:
-        return {}, "stale", [f"invalid JSON: {e}"]
+        return {}, "stale", [f"invalid JSON: {e}"], behind
     if not narr:
-        return {}, "missing", []
+        return {}, "missing", [], behind
+    state, notes = "ok", []
     errs, _ = build.validate(narr, facts)
-    return (narr, "ok", []) if not errs else ({}, "stale", errs[:3])
+    if errs:
+        pruned, dropped = build.prune_invalid(narr, facts)
+        if not dropped or build.validate(pruned, facts)[0]:
+            return {}, "stale", errs[:3], behind
+        narr, state = pruned, "partial"
+        notes = [f"dropped out-of-date entry {d}" for d in dropped[:3]] + \
+            ([f"… and {len(dropped) - 3} more"] if len(dropped) > 3 else [])
+    mp = build.meta_path(path)
+    d = build.delta(narr, facts, json.loads(mp.read_text()) if mp.exists() else None)
+    behind = {"events": sum(1 for e in d["new_events"] if e["kind"] in NOTABLE),
+              "entries": len(d["stale"]) + len(d["unreviewed"])}
+    return narr, state, notes, behind
 
 
 def transcript_extras(records: list[dict]) -> dict:
@@ -104,8 +123,12 @@ def transcript_extras(records: list[dict]) -> dict:
     return {"ai_title": title, "cost_usd": cost}
 
 
+def needs_work(state: str, behind: dict) -> bool:
+    return state != "ok" or behind["events"] > 0 or behind["entries"] > 0
+
+
 def summarize(main: Path, records: list[dict], facts: dict, narr: dict, state: str, errors: list[str],
-              href: str) -> dict:
+              behind: dict, href: str) -> dict:
     s, events = facts["session"], facts["events"]
     changed = [f for f in facts["files"].values() if f.get("status") != "unchanged"]
     tests = [e for e in events if e["kind"] == "test_run"]
@@ -128,13 +151,17 @@ def summarize(main: Path, records: list[dict], facts: dict, narr: dict, state: s
         "removed_lines": sum(f.get("removed_lines", 0) for f in changed),
         "edits": sum(1 for e in events if e["kind"] == "edit"),
         "test_runs": len(tests), "tests_failed": sum(1 for e in tests if e.get("tests_failed")),
+        "tests_last_failed": bool(tests and tests[-1].get("tests_failed")),
         "errors": sum(1 for e in events if e["kind"] == "error"),
+        "errors_with_lessons": len({e["uuid"] for e in events if e["kind"] == "error"} &
+                                   {l.get("event_ref") for l in narr.get("lessons") or []}),
         "tasks_total": len(tasks), "tasks_done": sum(1 for t in tasks if t["status"] == "completed"),
         "discrepancies": len(facts["discrepancies"]),
         "subagents": len(s.get("subagent_transcripts", [])),
-        "progress": (narr.get("progress") or {}).get("percent") if state == "ok" else None,
+        "progress": (narr.get("progress") or {}).get("percent") if state in ("ok", "partial") else None,
         "cost_usd": extras["cost_usd"],
-        "narrative": state, "narrative_errors": errors, "regen": regen if state != "ok" else [],
+        "narrative": state, "narrative_errors": errors, "narrative_behind": behind,
+        "regen": regen if needs_work(state, behind) else [],
     }
 
 
@@ -171,9 +198,9 @@ def process(main: Path, cache: Path, dist: Path, force: bool) -> tuple[dict | No
         facts_file.parent.mkdir(parents=True, exist_ok=True)
         facts_file.write_text(json.dumps(facts, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
                               encoding="utf-8")
-        narr, state, errors = narrative_state(sdir / "narrative.json", facts)
+        narr, state, errors, behind = narrative_state(sdir / "narrative.json", facts)
         write_if_changed(page, build.render(facts, narr, "../../index.html"))
-        summary = summarize(main, records, facts, narr, state, errors, f"s/{main.stem}/index.html")
+        summary = summarize(main, records, facts, narr, state, errors, behind, f"s/{main.stem}/index.html")
         status = "built"
     sdir.mkdir(parents=True, exist_ok=True)
     sum_file.write_text(json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
@@ -234,14 +261,17 @@ def main(argv=None) -> int:
     write_if_changed(dist / "index.html", render_index(proj, sessions))
 
     print(", ".join(f"{n} {k}" for k, n in sorted(counts.items())) + f" → {dist / 'index.html'}", file=sys.stderr)
-    todo = [s for s in sorted(sessions, key=lambda s: s["start"] or "") if s["narrative"] != "ok"]
+    todo = [s for s in sorted(sessions, key=lambda s: s["start"] or "") if s["regen"]]
     if todo:
-        print(f"\n{len(todo)} session(s) without a valid narrative (pages are facts-only):", file=sys.stderr)
+        print(f"\n{len(todo)} session(s) whose narrative is missing or behind:", file=sys.stderr)
         for s in todo:
-            print(f"  {s['id'][:8]}  {s['narrative']:<7}  {s['title'][:70]}", file=sys.stderr)
+            b = s["narrative_behind"]
+            lag = f" (+{b['events']} events, {b['entries']} changed entries)" if b["events"] or b["entries"] else ""
+            print(f"  {s['id'][:8]}  {s['narrative']:<7}{lag}  {s['title'][:60]}", file=sys.stderr)
             for err in s["narrative_errors"]:
                 print(f"      {err}", file=sys.stderr)
-            print(f"      in Claude Code: {s['regen'][0]}", file=sys.stderr)
+            print(f"      in Claude Code: {s['regen'][0]}   (updates incrementally if a narrative exists)",
+                  file=sys.stderr)
         print(f"Then rebuild (only changed sessions are re-extracted):\n  {todo[0]['regen'][1]}", file=sys.stderr)
     return 0
 

@@ -46,7 +46,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .filters button.on { color: var(--ink); border-color: var(--ink); }
 .ev { position: relative; padding: 4px 6px 4px 18px; border-radius: 6px; font-size: 12.5px; cursor: default; }
 .ev::before { content: ""; position: absolute; left: 5px; top: 10px; width: 7px; height: 7px; border-radius: 50%; background: var(--ref); }
-.ev.k-edit::before { background: var(--accent); } .ev.k-error::before { background: var(--err); }
+.ev.k-edit::before { background: var(--accent); } .ev.k-error { color: var(--muted); }
 .ev.k-test_run::before { background: var(--acc); } .ev.k-test_run.fail::before { background: var(--err); }
 .ev.k-user_msg::before { background: var(--warn); border-radius: 2px; }
 .ev.clickable { cursor: pointer; } .ev.clickable:hover { background: var(--soft); }
@@ -98,8 +98,8 @@ th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 4px 8p
 th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
 td code { word-break: break-all; }
 .muted { color: var(--muted); } .small { font-size: 12px; }
-.disc { border-color: var(--warn); } .disc h2 { color: var(--warn); margin: 0; }
-.disc .inner { padding: 12px 16px; }
+details.diag { margin-top: 24px; opacity: .8; } details.diag > summary { cursor: pointer; padding: 10px 16px; color: var(--muted); font-size: 12.5px; }
+.diag .inner { padding: 0 16px 12px; } .diag table + table { margin-top: 12px; }
 .toolbar { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .toolbar button { font: inherit; font-size: 12px; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
 .empty { padding: 20px; color: var(--muted); }
@@ -217,7 +217,7 @@ function timeline() {
   for (const l of N.lessons || []) (lessons[l.event_ref] ||= []).push(l);
   const kinds = ["user_msg", "edit", "test_run", "error", "bash"];
   const label = {user_msg: "prompts", edit: "edits", test_run: "tests", error: "errors", bash: "bash"};
-  const on = new Set(kinds.filter(k => k !== "bash"));
+  const on = new Set(kinds.filter(k => k !== "bash" && k !== "error"));  // failed tool calls: see Diagnostics
   const list = h("div", {});
   const apply = () => list.querySelectorAll(".ev").forEach(el => {
     el.hidden = !on.has(el.dataset.kind) && !el.dataset.lesson;
@@ -364,14 +364,6 @@ function fileCard(path) {
 }
 function mainPanel() {
   const main = document.getElementById("main");
-  const disc = F.discrepancies || [];
-  if (disc.length) put(main,h("div", {class: "panel disc"}, h("div", {class: "inner"},
-    h("h2", {}, `Discrepancies (${disc.length})`),
-    h("p", {class: "small muted", style: "margin:4px 0"}, "Places where the transcript and git disagree. Shown as-is rather than guessed."),
-    h("table", {}, h("tr", {}, h("th", {}, "Kind"), h("th", {}, "Path"), h("th", {}, "Detail")),
-      disc.map(x => h("tr", {}, h("td", {}, h("code", {}, x.kind)),
-        h("td", {}, x.path ? h("a", {href: "#" + fid(x.path), onclick: e => { e.preventDefault(); focusFile(x.path); }}, x.path) : "—"),
-        h("td", {}, x.detail, x.event ? [" ", h("a", {class: "cite", href: "#ev-" + x.event, onclick: e => { e.preventDefault(); focusEvent(x.event); }}, "event")] : null)))))));
   // files with described symbols first, then code, then by size of change
   const weight = p => [Object.keys((nFiles[p] || {}).symbols || {}).length, files[p].kind === "code" ? 1 : 0,
     (files[p].added_lines || 0) + (files[p].removed_lines || 0)];
@@ -383,6 +375,19 @@ function mainPanel() {
   put(main, h("div", {class: "toolbar"}, h("h2", {}, `Files (${paths.length})`), expand),
     paths.length ? paths.map(fileCard) : h("div", {class: "panel empty"}, "No file changes."));
   if ((N.files && paths.filter(p => nFiles[p]).length === 1) || paths.length === 1) { const d = main.querySelector("details.file"); if (d) d.open = true; }
+  // extraction notes (transcript/git disagreements, failed tool calls): for the extractor and Claude, not the reader
+  const disc = F.discrepancies || [], errs = events.filter(e => e.kind === "error");
+  const goEv = id => e => { e.preventDefault(); focusEvent(id); };
+  if (disc.length || errs.length) put(main, h("details", {class: "panel diag"},
+    h("summary", {}, `Diagnostics (${disc.length + errs.length})`,
+      h("span", {class: "muted small"}, " · extraction notes, mostly for Claude")),
+    h("div", {class: "inner"},
+      disc.length && h("table", {}, h("tr", {}, h("th", {}, "Discrepancy"), h("th", {}, "Path"), h("th", {}, "Detail")),
+        disc.map(x => h("tr", {}, h("td", {}, h("code", {}, x.kind)),
+          h("td", {}, x.path ? h("a", {href: "#" + fid(x.path), onclick: e => { e.preventDefault(); focusFile(x.path); }}, x.path) : "—"),
+          h("td", {}, x.detail, x.event ? [" ", h("a", {class: "cite", href: "#ev-" + x.event, onclick: goEv(x.event)}, "event")] : null)))),
+      errs.length && h("table", {}, h("tr", {}, h("th", {}, "Failed tool call"), h("th", {}, "When")),
+        errs.map(e => h("tr", {}, h("td", {}, e.summary), h("td", {}, h("a", {class: "cite", href: "#ev-" + e.uuid, onclick: goEv(e.uuid)}, fmtTime(e.ts)))))))));
 }
 
 header(); timeline(); mainPanel();
