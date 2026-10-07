@@ -33,6 +33,10 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.M)
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 RENAME_RATIO = 0.8
 MAX_DIFF_LINES = 2000
+# difflib is quadratic (worse with many repeated lines, e.g. JSON arrays, under
+# autojunk=False); past either limit, diff with git (Myers) instead.
+DIFFLIB_MAX_LINE_PRODUCT = 250_000
+DIFFLIB_MAX_BYTES = 200_000
 MAX_DATA_CHANGES = 500
 
 STRUCTURED_EXT = {".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml"}
@@ -49,13 +53,38 @@ def parse_ts(ts: str) -> datetime:
 
 def git(repo: str, *args: str) -> str | None:
     try:
-        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=False)
+        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, check=False)
     except FileNotFoundError:
         return None
-    return r.stdout if r.returncode == 0 else None
+    # Binary blobs (images, pickles) are not UTF-8; keep extraction alive.
+    return r.stdout.decode("utf-8", errors="replace") if r.returncode == 0 else None
+
+
+def _too_big_for_difflib(before: str | None, after: str | None) -> bool:
+    nb = (before or "").count("\n") + 1
+    na = (after or "").count("\n") + 1
+    size = len(before or "") + len(after or "")
+    return nb * na > DIFFLIB_MAX_LINE_PRODUCT or size > DIFFLIB_MAX_BYTES
+
+
+def _git_no_index_diff(before: str | None, after: str | None, *opts: str) -> str:
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        a, b = Path(d, "a"), Path(d, "b")
+        a.write_text(before or "")
+        b.write_text(after or "")
+        r = subprocess.run(["git", "diff", "--no-index", "--no-color", "--text", *opts, str(a), str(b)],
+                           capture_output=True, check=False)
+    return r.stdout.decode("utf-8", errors="replace")
 
 
 def unified(before: str | None, after: str | None, name: str = "") -> tuple[str, bool]:
+    if _too_big_for_difflib(before, after):
+        body = _git_no_index_diff(before, after, "-U3").splitlines()
+        hunks = next((i for i, l in enumerate(body) if l.startswith("@@")), len(body))
+        lines = [f"--- a/{name}", f"+++ b/{name}", *body[hunks:]]
+        truncated = len(lines) > MAX_DIFF_LINES
+        return "\n".join(lines[:MAX_DIFF_LINES]), truncated
     lines = list(difflib.unified_diff((before or "").splitlines(), (after or "").splitlines(),
                                       f"a/{name}", f"b/{name}", lineterm="", n=3))
     truncated = len(lines) > MAX_DIFF_LINES
@@ -69,6 +98,12 @@ def fingerprint(before: str | None, after: str | None) -> str:
 
 
 def line_stats(before: str | None, after: str | None) -> dict:
+    if _too_big_for_difflib(before, after):
+        stat = _git_no_index_diff(before, after, "--numstat").split()
+        if len(stat) >= 2 and stat[0].isdigit() and stat[1].isdigit():
+            return {"added_lines": int(stat[0]), "removed_lines": int(stat[1])}
+        # Never fall back to difflib here: that is the hang this path avoids.
+        return {"added_lines": (after or "").count("\n"), "removed_lines": (before or "").count("\n")}
     added = removed = 0
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
             None, (before or "").splitlines(), (after or "").splitlines(), autojunk=False).get_opcodes():

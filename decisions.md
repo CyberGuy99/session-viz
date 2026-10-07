@@ -118,3 +118,6 @@ The user wants project mode to take an optional markdown file of extra requests,
 
 ## 2026-10-06 — Partial narratives render
 Project mode used to show a narrative all-or-nothing, so one outdated entry dropped the page to facts-only. `prune_invalid()` now removes the failing entries (a file, symbol, data change or lesson) and keeps the rest, marked "partial". Only goal/progress errors still mean "stale". The index also says when a valid narrative is behind its session (newer notable events or changed entries, via the delta).
+
+## 2026-10-07 — Large and binary inputs no longer hang or crash extract.py
+A project build ran for over 2 h on one session that edited large result JSONs (mostly repeated lines). `line_stats` ran `difflib.SequenceMatcher(autojunk=False)`, which is quadratic and much worse with duplicate lines. `unified` has the same exposure. Past 250k before×after lines or 200 KB, both now shell out to `git diff --no-index --text` (Myers; `--text` because NUL bytes otherwise make git print `- -` numstat). `line_stats` never falls back to difflib on that path. Separately, `git()` decoded `git show` output strictly, so any session that touched a PNG crashed with `UnicodeDecodeError`; output is now decoded with `errors="replace"`. The hung session extracts in 53 s.

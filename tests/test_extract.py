@@ -225,3 +225,24 @@ def test_csv_and_structured_helpers():
     assert len(c["changed_rows"]) == 3
     s = extract.diff_structured("json", '{"x": [1, 2]}', '{"x": [1]}')
     assert s == [{"path": "x[1]", "op": "removed", "before": "2", "after": None}]
+
+
+def test_large_repetitive_diff_uses_git_and_is_fast():
+    import time
+    before = "\n".join(["  0,"] * 20000 + ["}"])
+    after = "\n".join(["  0,"] * 19000 + ["  1,"] * 500 + ["}"])
+    assert extract._too_big_for_difflib(before, after)
+    t0 = time.time()
+    stats = extract.line_stats(before, after)
+    diff, _ = extract.unified(before, after, "r.json")
+    assert time.time() - t0 < 10
+    assert stats == {"added_lines": 500, "removed_lines": 1000}
+    assert diff.startswith("--- a/r.json\n+++ b/r.json\n@@")
+
+
+def test_git_output_with_binary_bytes_does_not_crash(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "x.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\xff")
+    git_out(tmp_path, "add", "x.png")
+    out = extract.git(str(tmp_path), "show", ":x.png")
+    assert out is not None and out.startswith("�PNG")
